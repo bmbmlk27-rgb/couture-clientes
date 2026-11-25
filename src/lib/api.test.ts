@@ -24,6 +24,30 @@ describe('extractMatches', () => {
     expect(m.odds).toEqual({ home: 2, draw: 3.2, away: 3.5 });
   });
 
+  it('lit le format mobile v3 (opponent1/opponent2, startTs, nonStarted)', () => {
+    const game = (id: number, a: string, b: string) => ({
+      opponent1: { fullName: a, opps: [{ id: 1, name: a }] },
+      opponent2: { fullName: b, opps: [{ id: 2, name: b }] },
+      nonStarted: true, id, startTs: 1895615500,
+    });
+    const payload = {
+      data: [{
+        mainLigas: [
+          { id: 3074685, name: "FC 26. Championnat d'Allemagne", gamesCount: 1, games: [game(774047883, 'Bayern Munich', 'Borussia Dortmund')] },
+          { id: 2812138, name: 'FC25. Penalty', gamesCount: 1, games: [game(774047882, 'Bayern Munich', 'Arsenal')] },
+          { id: 3088640, name: 'Allemagne. Bundesliga. Simulation', gamesCount: 3 },
+        ],
+      }],
+    };
+    const ms = extractMatches(payload);
+    expect(ms).toHaveLength(1); // la ligue « Penalty » est écartée
+    expect(ms[0].league).toBe("FC 26. Championnat d'Allemagne");
+    expect(ms[0].away.name).toBe('Borussia Dortmund');
+    expect(ms[0].status).toBe('upcoming');
+    expect(ms[0].startsAt).toBe(1895615500 * 1000);
+    expect(ms[0].apiGameId).toBe('774047883');
+  });
+
   it('ignore une réponse sans match', () => {
     expect(extractMatches({ data: [] })).toEqual([]);
   });

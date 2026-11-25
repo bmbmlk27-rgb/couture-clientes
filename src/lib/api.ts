@@ -58,14 +58,15 @@ export async function fetchMatches(): Promise<FetchResult> {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/ChampsBySport?${qs}`, { headers: HEADERS });
       if (response.status === 400) {
-        lastError = 'HTTP 400 (paramètres refusés)';
+        // Ne masque pas un diagnostic plus utile obtenu avec une variante précédente.
+        if (lastError === 'Erreur API') lastError = 'HTTP 400 (paramètres refusés)';
         continue; // variante suivante
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const matches = extractMatches(data);
       if (matches.length === 0) {
-        lastError = 'Réponse vide';
+        lastError = 'Aucun match FC 26 dans la réponse Melbet';
         continue;
       }
       return { matches, latencyMs: Math.round(performance.now() - t0) };
@@ -85,14 +86,18 @@ export async function fetchMatches(): Promise<FetchResult> {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined =>
-  typeof v === 'string' && v.trim() ? v.trim() : isObj(v) ? str(v.name ?? v.title ?? v.N) : undefined;
+  typeof v === 'string' && v.trim() ? v.trim() : isObj(v) ? str(v.fullName ?? v.name ?? v.title ?? v.N) : undefined;
 
 const VIRTUAL_RE = /fifa|fc\s?2\d|virtu|cyber|e-?sport|esoccer/i;
+/** Séances de tirs au but : le modèle de buts (Poisson) ne s'y applique pas. */
+const PENALTY_RE = /penalt/i;
 
 function teamNames(g: Obj): [string, string] | null {
   const pairs: [unknown, unknown][] = [
     [g.O1, g.O2], [g.opp1, g.opp2], [g.team1, g.team2], [g.home, g.away],
     [g.homeTeam, g.awayTeam], [g.O1E, g.O2E],
+    // Format mobile v3 : opponent1: { fullName, opps: [...] }
+    [g.opponent1, g.opponent2],
   ];
   if (Array.isArray(g.teams) && g.teams.length >= 2) pairs.push([g.teams[0], g.teams[1]]);
   if (Array.isArray(g.opponents) && g.opponents.length >= 2) pairs.push([g.opponents[0], g.opponents[1]]);
@@ -105,7 +110,7 @@ function teamNames(g: Obj): [string, string] | null {
 }
 
 function timestamp(g: Obj): number {
-  for (const k of ['S', 'startTime', 'start', 'startDate', 'ts', 'date', 'dateStart']) {
+  for (const k of ['S', 'startTs', 'startTime', 'start', 'startDate', 'ts', 'date', 'dateStart']) {
     const v = g[k];
     const n = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) || Number(v) : NaN;
     if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
@@ -116,6 +121,7 @@ function timestamp(g: Obj): number {
 function status(startsAt: number, g: Obj): MatchStatus {
   if (g.finished === true || g.isFinished === true) return 'finished';
   if (g.live === true || g.isLive === true) return 'live';
+  if (g.nonStarted === true) return 'upcoming';
   const now = Date.now();
   if (startsAt > now) return 'upcoming';
   return now - startsAt < 10 * 60 * 1000 ? 'live' : 'finished';
@@ -162,7 +168,7 @@ export function extractMatches(data: unknown): Match[] {
   };
 
   walk(data, '', 0);
-  const virtual = found.filter((m) => VIRTUAL_RE.test(m.league));
+  const virtual = found.filter((m) => VIRTUAL_RE.test(m.league) && !PENALTY_RE.test(m.league));
   return (virtual.length ? virtual : found).sort((a, b) => a.startsAt - b.startsAt);
 }
 
