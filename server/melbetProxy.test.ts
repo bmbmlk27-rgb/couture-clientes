@@ -89,3 +89,20 @@ describe('route /api/melbet-odds', () => {
     expect((await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=1'), ok('<html>'))).status).toBe(502);
   });
 });
+
+describe('diagnostic /api/melbet-odds?probe=1', () => {
+  it('prend le prochain match Penalty et essaie plusieurs variantes de GetGame', async () => {
+    const champs = { data: [{ mainLigas: [
+      { name: 'FC 26. Championnat d\'Allemagne', gamesCount: 4 },
+      { name: 'FC25. Penalty', games: [{ id: 774050947, nonStarted: true, opponent1: { fullName: 'PSG' }, opponent2: { fullName: 'Al Nassr' } }] },
+    ] }] };
+    const f = vi.fn(async (url: string) =>
+      new Response(url.includes('ChampsBySport') ? JSON.stringify(champs) : '{"Value":{}}', { status: url.includes('LineFeed') ? 200 : 404 }));
+    const res = await handleMelbet(new Request('https://x.app/api/melbet-odds?probe=1'), f as unknown as typeof fetch);
+    const body = await res.json();
+    expect(body.game).toMatchObject({ id: 774050947, label: 'PSG - Al Nassr' });
+    expect(body.attempts).toHaveLength(5);
+    expect(body.attempts.every((a: { url: string }) => a.url.includes('774050947'))).toBe(true);
+    expect(body.attempts.find((a: { url: string }) => a.url.includes('/LineFeed/mobile/v3/GetGame')).status).toBe(200);
+  });
+});

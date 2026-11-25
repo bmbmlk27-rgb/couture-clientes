@@ -129,6 +129,82 @@ export async function handleMelbetOddsRequest(request: Request, fetchImpl: typeo
 }
 
 /* ------------------------------------------------------------------ */
+/* Diagnostic : /api/melbet-odds?probe=1                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Prend le prochain match Penalty de ChampsBySport et essaie plusieurs
+ * variantes d'appel des cotes, en renvoyant statut et début de réponse de
+ * chacune. Les identifiants viennent de Melbet lui-même (aucune entrée
+ * utilisateur dans les URL appelées).
+ */
+const CHAMPS_QUERY = 'cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22';
+const PROBE_BODY_CHARS = 4000;
+
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Matchs des ligues Penalty : [{ id, league, label, nonStarted }]. */
+export function penaltyGames(data: unknown): { id: number; league: string; label: string; nonStarted: unknown }[] {
+  const out: { id: number; league: string; label: string; nonStarted: unknown }[] = [];
+  const walk = (node: unknown, depth: number) => {
+    if (depth > 8) return;
+    if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
+    if (!isObj(node)) return;
+    if (Array.isArray(node.games) && typeof node.name === 'string' && /penalt/i.test(node.name)) {
+      for (const g of node.games) {
+        if (!isObj(g) || typeof g.id !== 'number') continue;
+        const name = (o: unknown) => (isObj(o) && typeof o.fullName === 'string' ? o.fullName : '?');
+        out.push({ id: g.id, league: node.name, label: `${name(g.opponent1)} - ${name(g.opponent2)}`, nonStarted: g.nonStarted });
+      }
+    }
+    for (const v of Object.values(node)) if (typeof v === 'object') walk(v, depth + 1);
+  };
+  walk(data, 0);
+  return out;
+}
+
+export async function handleMelbetProbe(fetchImpl: typeof fetch = fetch): Promise<Response> {
+  const call = async (url: string) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const r = await fetchImpl(url, { headers: MELBET_HEADERS, signal: ctrl.signal });
+      const body = await r.text();
+      return { url, status: r.status, length: body.length, body: body.slice(0, PROBE_BODY_CHARS) };
+    } catch (e) {
+      return { url, status: 0, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const list = await call(`${MELBET_ORIGIN}/ChampsBySport?${CHAMPS_QUERY}`);
+  let games: ReturnType<typeof penaltyGames> = [];
+  try {
+    games = penaltyGames(JSON.parse(list.body ?? ''));
+  } catch {
+    /* réponse illisible : signalée ci-dessous */
+  }
+  const game = games.find((g) => g.nonStarted === true) ?? games[0];
+  if (!game) {
+    return json(200, { error: 'Aucun match Penalty dans ChampsBySport', champsBySport: { status: list.status, body: list.body?.slice(0, 500) } });
+  }
+
+  const id = game.id;
+  const root = MELBET_ORIGIN.replace(/\/MainFeedLive\//, '/');
+  const variants = [
+    `${MELBET_ORIGIN}/GetGame?gameId=${id}&${GET_GAME_PARAMS}`,
+    `${MELBET_ORIGIN}/GetGame?gameId=${id}`,
+    `${MELBET_ORIGIN}/GetGame?id=${id}&${GET_GAME_PARAMS}`,
+    `${root.replace('/mobile/v3', '')}/LineFeed/mobile/v3/GetGame?gameId=${id}&${GET_GAME_PARAMS}`,
+    `${root.replace('/mobile/v3', '')}/LiveFeed/mobile/v3/GetGame?gameId=${id}&${GET_GAME_PARAMS}`,
+  ];
+  const attempts = await Promise.all(variants.map(call));
+  return json(200, { game, otherPenaltyGames: games.length - 1, attempts });
+}
+
+/* ------------------------------------------------------------------ */
 /* Aiguillage commun                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -138,7 +214,9 @@ export function isOddsRoute(url: URL): boolean {
 }
 
 export function handleMelbet(request: Request, fetchImpl: typeof fetch = fetch): Promise<Response> {
-  return isOddsRoute(new URL(request.url))
+  const url = new URL(request.url);
+  if (isOddsRoute(url) && url.searchParams.get('probe') === '1') return handleMelbetProbe(fetchImpl);
+  return isOddsRoute(url)
     ? handleMelbetOddsRequest(request, fetchImpl)
     : handleMelbetRequest(request, fetchImpl);
 }
