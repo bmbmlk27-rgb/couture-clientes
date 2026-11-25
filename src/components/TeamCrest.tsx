@@ -20,6 +20,16 @@ export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number
         style={{ background: c1 }}
         aria-hidden
       />
+      {team.logoUrl ? (
+        <img
+          src={team.logoUrl}
+          alt={`Logo ${team.name}`}
+          width={size}
+          height={size}
+          loading="lazy"
+          className="relative h-full w-full object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,.6)]"
+        />
+      ) : (
       <svg viewBox="0 0 64 72" width={size} height={size * 1.125} className="relative -mt-[6%]" role="img" aria-label={`Écusson ${team.name}`}>
         <defs>
           <linearGradient id={`${id}-g`} x1="0" y1="0" x2="1" y2="1">
@@ -37,6 +47,7 @@ export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number
           {team.short}
         </text>
       </svg>
+      )}
     </motion.div>
   );
 }

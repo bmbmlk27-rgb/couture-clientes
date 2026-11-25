@@ -1,6 +1,6 @@
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { useMemo, useState } from 'react';
-import { Activity, CalendarClock, Flame, LayoutGrid, Filter, Check, DatabaseZap, Target, Home, Gauge, SearchX } from 'lucide-react';
+import { Activity, CalendarClock, Flame, LayoutGrid, Filter, Check, DatabaseZap, Target, Home, Gauge, SearchX, Database, Shield } from 'lucide-react';
 import { Header } from './components/Header';
 import { Tabs, type TabDef } from './components/Tabs';
 import { MatchCard } from './components/MatchCard';
@@ -8,7 +8,8 @@ import { Background } from './components/Background';
 import { CountUp } from './components/CountUp';
 import { useMatches } from './hooks/useMatches';
 import { GERMAN_LEAGUE } from './data/teams';
-import type { MatchWithPrediction } from './lib/types';
+import type { DataSource, DbState, MatchWithPrediction } from './lib/types';
+import { AVG_LEAGUE_GOALS } from './lib/config';
 
 type TabId = 'all' | 'live' | 'upcoming' | 'hot';
 const HIGH_CONFIDENCE = 55;
@@ -20,7 +21,7 @@ const gridVariants = {
 };
 
 export default function App() {
-  const { matches, source, error, latency, loading, updatedAt, reload } = useMatches();
+  const { matches, source, apiError, dbState, dbError, latency, loading, updatedAt, reload } = useMatches();
   const [tab, setTab] = useState<TabId>('all');
   const [germanOnly, setGermanOnly] = useState(true);
 
@@ -51,7 +52,16 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <Background />
-      <Header source={source} error={error} latency={latency} loading={loading} updatedAt={updatedAt} onRefresh={reload} />
+      <Header
+        apiConnected={source === 'api'}
+        apiError={apiError}
+        dbState={dbState}
+        dbError={dbError}
+        latency={latency}
+        loading={loading}
+        updatedAt={updatedAt}
+        onRefresh={reload}
+      />
 
       <main className="mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6">
         {/* Hero */}
@@ -77,7 +87,7 @@ export default function App() {
           <Kpi icon={Target} label="Matchs analysés" value={predicted.length} />
           <Kpi icon={Gauge} label="Confiance moyenne" value={avgConf} decimals={1} suffix="%" />
           <Kpi icon={Home} label="Victoires domicile prédites" value={homeShare} decimals={0} suffix="%" />
-          <Kpi icon={DatabaseZap} label="Source" text={source === 'api' ? 'API Melbet' : 'Démo'} tone={source === 'api' ? 'neon' : 'gold'} />
+          <Kpi icon={DatabaseZap} label="Source des matchs" text={SOURCE_LABEL[source]} tone={source === 'fallback' ? 'gold' : 'neon'} />
         </motion.section>
 
         {/* Navigation & filtres */}
@@ -101,20 +111,14 @@ export default function App() {
           </motion.button>
         </div>
 
-        {source === 'fallback' && !loading && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            className="mb-6 overflow-hidden rounded-xl border border-gold/20 bg-gold/[.06] px-4 py-3 text-sm text-gold/90"
-          >
-            API Melbet indisponible ({error ?? 'erreur inconnue'}). Affichage des <strong>données de test</strong> — nouvelle tentative automatique toutes les 60 s.
-          </motion.div>
-        )}
+        {!loading && <StatusBanner source={source} apiError={apiError} dbState={dbState} dbError={dbError} />}
 
         {/* Grille */}
         <AnimatePresence mode="wait">
           {loading && matches.length === 0 ? (
             <SkeletonGrid key="skeleton" />
+          ) : matches.length === 0 ? (
+            <EmptyState key="no-data" dbState={dbState} />
           ) : visible.length === 0 ? (
             <motion.div
               key={`empty-${tab}-${germanOnly}`}
@@ -149,10 +153,15 @@ export default function App() {
 
         <footer className="mt-14 border-t border-white/5 pt-6 text-xs leading-relaxed text-slate-500">
           <p>
-            Modèle : Double Poisson (λ domicile = BM<sub>dom</sub> × BE<sub>ext</sub> × 1,1 · λ extérieur = BM<sub>ext</sub> × BE<sub>dom</sub> × 0,9), scores 0–8, mi-temps à 45 % des λ.
+            Modèle : Double Poisson normalisé (λ dom = BM<sub>dom</sub>/M × BE<sub>ext</sub>/M × M × 1,1 · λ ext = BM<sub>ext</sub>/M × BE<sub>dom</sub>/M × M × 0,9,
+            M = {AVG_LEAGUE_GOALS}), sur les 10 derniers matchs terminés. Le score exact affiché est la case la plus probable de la matrice ;
+            la tendance 1N2 est la somme des probabilités.
           </p>
           <p className="mt-1">
-            Historique des équipes simulé (l’API ne fournit pas les résultats passés). Écussons générés, sans logos officiels. Outil statistique : aucune garantie de résultat — pariez de façon responsable.
+            {dbState === 'disabled'
+              ? 'Mode démo : Supabase non configuré, historiques des équipes simulés. '
+              : 'Historiques issus de la base Supabase. '}
+            Outil statistique : aucune garantie de résultat — pariez de façon responsable.
           </p>
         </footer>
       </main>
@@ -187,6 +196,62 @@ function SkeletonGrid() {
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="h-[420px] animate-pulse rounded-2xl border border-white/5 bg-night-800/40" />
       ))}
+    </motion.div>
+  );
+}
+
+const SOURCE_LABEL: Record<DataSource, string> = { api: 'API Melbet', database: 'Supabase', fallback: 'Démo' };
+
+function StatusBanner({ source, apiError, dbState, dbError }: { source: DataSource; apiError?: string; dbState: DbState; dbError?: string }) {
+  let msg: React.ReactNode = null;
+  if (dbState === 'error') {
+    msg = <>Base Supabase injoignable ({dbError}). Les prédictions sont suspendues ; nouvelle tentative toutes les 60 s.</>;
+  } else if (dbState === 'disabled') {
+    msg = (
+      <>
+        <strong>Mode démo</strong> : Supabase n’est pas configuré (voir <code className="font-mono">.env.example</code>), les historiques sont simulés.
+        {source === 'fallback' && <> API Melbet indisponible ({apiError ?? 'erreur inconnue'}) : matchs de test affichés.</>}
+      </>
+    );
+  } else if (source === 'database') {
+    msg = <>API Melbet indisponible ({apiError ?? 'erreur inconnue'}) : affichage des matchs à venir saisis dans la base.</>;
+  }
+  if (!msg) return null;
+  return (
+    <motion.div
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: 'auto' }}
+      className={`mb-6 overflow-hidden rounded-xl border px-4 py-3 text-sm ${
+        dbState === 'error' ? 'border-danger/30 bg-danger/[.07] text-danger' : 'border-gold/20 bg-gold/[.06] text-gold/90'
+      }`}
+    >
+      {msg}
+    </motion.div>
+  );
+}
+
+function EmptyState({ dbState }: { dbState: DbState }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      className="grid place-items-center gap-3 rounded-2xl border border-dashed border-white/10 bg-night-800/30 px-6 py-20 text-center backdrop-blur-xl"
+    >
+      <Database className="h-9 w-9 text-slate-500" />
+      <p className="font-display text-xl font-semibold text-white">Aucune donnée</p>
+      <p className="max-w-md text-sm text-slate-400">
+        Aucun match à venir n’a été trouvé (API Melbet indisponible et aucun match « à venir » dans la base).
+        {dbState === 'connected' && ' Saisissez des résultats et les prochains matchs dans l’administration.'}
+      </p>
+      {dbState === 'connected' && (
+        <a
+          href="/admin"
+          className="mt-2 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-neon to-neon-soft px-4 py-2 text-sm font-semibold text-abyss shadow-neon"
+        >
+          <Shield className="h-4 w-4" /> Ouvrir l’administration
+        </a>
+      )}
     </motion.div>
   );
 }

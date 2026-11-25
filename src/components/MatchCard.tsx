@@ -1,5 +1,5 @@
 import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from 'framer-motion';
-import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { MatchWithPrediction } from '../lib/types';
 import { TeamCrest } from './TeamCrest';
@@ -11,7 +11,7 @@ export const cardVariants = {
   show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', stiffness: 120, damping: 18 } },
 };
 
-const avg = (a: number[]) => (a.reduce((x, y) => x + y, 0) / a.length).toFixed(1);
+const avg = (a: number[]) => (a.length ? (a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : '–');
 
 function StatusPill({ m }: { m: MatchWithPrediction }) {
   if (m.status === 'live')
@@ -119,8 +119,20 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
 
               <div className="grid grid-cols-2 gap-3">
                 <ScoreBox label="Mi-temps" score={p.halfTimeScore} delay={delay} />
-                <ScoreBox label="Score final" score={p.fullTimeScore} delay={delay + 0.15} highlight />
+                <ScoreBox label="Score exact" score={p.fullTimeScore} delay={delay + 0.15} highlight sub={`${p.fullTimeScoreProbability.toFixed(1)} %`} />
               </div>
+
+              <OutcomeBar p={p.probabilities} winner={p.winner} delay={delay + 0.1} />
+
+              {!p.scoreMatchesWinner && (
+                <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-snug text-slate-400">
+                  <Info className="mt-px h-3.5 w-3.5 shrink-0 text-gold" />
+                  <span>
+                    Le score exact le plus probable ({p.fullTimeScore}) ne désigne pas le vainqueur le plus probable ({p.winner}) :
+                    la tendance 1N2 additionne tous les scores possibles.
+                  </span>
+                </p>
+              )}
 
               <div className="mt-4 flex items-center justify-between gap-3">
                 <ConfidenceRing value={p.confidence} delay={delay + 0.2} />
@@ -132,7 +144,12 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
             </div>
           ) : (
             <div className="mt-5 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 p-4 text-sm text-gold">
-              <AlertTriangle className="h-4 w-4" /> Historique insuffisant (moins de 3 matchs).
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>
+                Historique insuffisant (3 matchs terminés minimum par équipe) : {match.home.name}{' '}
+                {match.homeHistory.goalsScored.length}, {match.away.name} {match.awayHistory.goalsScored.length}.
+                Ajoutez des résultats dans l’administration.
+              </span>
             </div>
           )}
         </div>
@@ -157,7 +174,7 @@ function TeamBlock({ m, side }: { m: MatchWithPrediction; side: 'home' | 'away' 
   );
 }
 
-function ScoreBox({ label, score, delay, highlight }: { label: string; score: string; delay: number; highlight?: boolean }) {
+function ScoreBox({ label, score, delay, highlight, sub }: { label: string; score: string; delay: number; highlight?: boolean; sub?: string }) {
   return (
     <div className={`rounded-lg px-3 py-2.5 text-center ${highlight ? 'bg-neon/10 ring-1 ring-neon/30' : 'bg-black/25'}`}>
       <div className="text-[10px] uppercase tracking-[.16em] text-slate-400">{label}</div>
@@ -166,6 +183,39 @@ function ScoreBox({ label, score, delay, highlight }: { label: string; score: st
         delay={delay}
         className={`mt-0.5 block font-display text-[28px] font-bold tabular-nums leading-none ${highlight ? 'text-neon drop-shadow-[0_0_12px_rgba(57,255,136,.6)]' : 'text-white'}`}
       />
+      {sub && <div className="mt-1 font-mono text-[10px] text-slate-400">{sub}</div>}
+    </div>
+  );
+}
+
+/** Barre 1 / N / 2 animée : probabilités cumulées de chaque issue. */
+function OutcomeBar({ p, winner, delay }: { p: { home: number; draw: number; away: number }; winner: string; delay: number }) {
+  const parts = [
+    { key: '1', v: p.home, on: winner === 'Domicile', color: 'bg-neon' },
+    { key: 'N', v: p.draw, on: winner === 'Match Nul', color: 'bg-slate-400' },
+    { key: '2', v: p.away, on: winner === 'Extérieur', color: 'bg-gold' },
+  ];
+  return (
+    <div className="mt-3">
+      <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full bg-white/5">
+        {parts.map((x, i) => (
+          <motion.div
+            key={x.key}
+            className={`${x.color} ${x.on ? 'opacity-100' : 'opacity-35'}`}
+            initial={{ width: 0 }}
+            whileInView={{ width: `${x.v}%` }}
+            viewport={{ once: true }}
+            transition={{ duration: 1, delay: delay + i * 0.08, ease: [0.16, 1, 0.3, 1] }}
+          />
+        ))}
+      </div>
+      <div className="mt-1.5 flex justify-between font-mono text-[10px]">
+        {parts.map((x) => (
+          <span key={x.key} className={x.on ? 'font-bold text-white' : 'text-slate-500'}>
+            {x.key} · {x.v.toFixed(1)}%
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

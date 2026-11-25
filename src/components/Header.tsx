@@ -1,23 +1,24 @@
 import { motion, useScroll, useTransform } from 'framer-motion';
-import { RefreshCw, Gamepad2 } from 'lucide-react';
-import type { DataSource } from '../lib/types';
+import { RefreshCw, Gamepad2, Shield } from 'lucide-react';
+import type { DbState } from '../lib/types';
 
 interface Props {
-  source: DataSource;
-  error?: string;
+  apiConnected: boolean;
+  apiError?: string;
+  dbState: DbState;
+  dbError?: string;
   latency?: number;
   loading: boolean;
   updatedAt: number;
   onRefresh: () => void;
 }
 
-export function Header({ source, error, latency, loading, updatedAt, onRefresh }: Props) {
+export function Header({ apiConnected, apiError, dbState, dbError, latency, loading, updatedAt, onRefresh }: Props) {
   const { scrollY } = useScroll();
   // Ombre et opacité dynamiques selon le défilement
   const shadow = useTransform(scrollY, [0, 120], ['0 0 0 rgba(0,0,0,0)', '0 18px 40px -12px rgba(0,0,0,.85)']);
   const bg = useTransform(scrollY, [0, 120], ['rgba(6,10,24,.35)', 'rgba(6,10,24,.78)']);
   const border = useTransform(scrollY, [0, 120], ['rgba(255,255,255,.04)', 'rgba(57,255,136,.18)']);
-  const connected = source === 'api';
 
   return (
     <motion.header
@@ -41,22 +42,30 @@ export function Header({ source, error, latency, loading, updatedAt, onRefresh }
         </div>
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
-          <div
-            className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
-              connected ? 'border-neon/30 bg-neon/10 text-neon' : 'border-danger/30 bg-danger/10 text-danger'
-            }`}
-            title={connected ? `API connectée${latency ? ` (${latency} ms)` : ''}` : `API déconnectée : ${error ?? 'inconnue'} — données de test`}
-          >
-            <span className="relative flex h-2.5 w-2.5">
-              <span className={`absolute inline-flex h-full w-full animate-ping-slow rounded-full ${connected ? 'bg-neon' : 'bg-danger'}`} />
-              <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${connected ? 'bg-neon' : 'bg-danger'}`} />
-            </span>
-            <span className="hidden sm:inline">{connected ? 'API connectée' : 'API déconnectée'}</span>
-            <span className="sm:hidden">{connected ? 'Live' : 'Off'}</span>
-          </div>
+          <StatusPill
+            ok={apiConnected}
+            label={apiConnected ? 'API connectée' : 'API déconnectée'}
+            short="API"
+            title={apiConnected ? `API Melbet connectée${latency ? ` (${latency} ms)` : ''}` : `API déconnectée : ${apiError ?? 'inconnue'}`}
+          />
+          <StatusPill
+            ok={dbState === 'connected'}
+            neutral={dbState === 'disabled'}
+            label={dbState === 'connected' ? 'Base connectée' : dbState === 'disabled' ? 'Mode démo' : 'Base en erreur'}
+            short={dbState === 'disabled' ? 'Démo' : 'BDD'}
+            title={dbState === 'connected' ? 'Supabase connectée' : dbState === 'disabled' ? 'Supabase non configurée : historiques simulés' : `Supabase : ${dbError ?? 'erreur'}`}
+          />
           <span className="hidden font-mono text-[11px] text-slate-500 md:inline">
             {new Date(updatedAt).toLocaleTimeString('fr-FR')}
           </span>
+          <a
+            href="/admin"
+            aria-label="Administration"
+            title="Administration"
+            className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 bg-white/5 text-slate-300 transition hover:border-gold/40 hover:text-gold"
+          >
+            <Shield className="h-4 w-4" />
+          </a>
           <motion.button
             whileTap={{ scale: 0.9 }}
             onClick={onRefresh}
@@ -69,5 +78,23 @@ export function Header({ source, error, latency, loading, updatedAt, onRefresh }
         </div>
       </div>
     </motion.header>
+  );
+}
+
+function StatusPill({ ok, neutral, label, short, title }: { ok: boolean; neutral?: boolean; label: string; short: string; title: string }) {
+  const tone = neutral
+    ? { box: 'border-gold/30 bg-gold/10 text-gold', dot: 'bg-gold' }
+    : ok
+      ? { box: 'border-neon/30 bg-neon/10 text-neon', dot: 'bg-neon' }
+      : { box: 'border-danger/30 bg-danger/10 text-danger', dot: 'bg-danger' };
+  return (
+    <div className={`flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-xs font-medium sm:px-3 ${tone.box}`} title={title}>
+      <span className="relative flex h-2.5 w-2.5">
+        <span className={`absolute inline-flex h-full w-full animate-ping-slow rounded-full ${tone.dot}`} />
+        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+      </span>
+      <span className="hidden lg:inline">{label}</span>
+      <span className="lg:hidden">{short}</span>
+    </div>
   );
 }

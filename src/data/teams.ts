@@ -37,35 +37,46 @@ const FALLBACK_COLORS: [string, string][] = [
   ['#ff4d6d', '#0a1124'], ['#b388ff', '#0a1124'], ['#ff9f1c', '#0a1124'],
 ];
 
-const norm = (s: string) =>
+export const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\(.*?\)/g, '').trim();
 
-function findProfile(name: string): TeamProfile | undefined {
+export function findProfile(name: string): TeamProfile | undefined {
   const n = norm(name);
   return BUNDESLIGA_TEAMS.find(
     (t) => norm(t.name) === n || t.aliases?.some((a) => n.includes(norm(a))),
   );
 }
 
-/** Retrouve un club connu ou fabrique une identité visuelle stable à partir du nom. */
-export function resolveTeam(name: string): Team {
+/**
+ * Retrouve un club connu ou fabrique une identité visuelle stable à partir du nom.
+ * `extra` permet d'attacher l'id Supabase et le logo de la table `teams`.
+ */
+export function resolveTeam(name: string, extra: Pick<Team, 'dbId' | 'logoUrl'> = {}): Team {
   const p = findProfile(name);
-  if (p) return { name: p.name, short: p.short, colors: p.colors };
+  if (p) return { name: p.name, short: p.short, colors: p.colors, ...extra };
   const clean = name.replace(/\(.*?\)/g, '').trim() || name;
   const initials = clean.split(/\s+/).map((w) => w[0]).join('').slice(0, 3).toUpperCase();
   return {
     name: clean,
     short: initials || '???',
     colors: FALLBACK_COLORS[hashString(clean) % FALLBACK_COLORS.length],
+    ...extra,
   };
 }
 
+/** Deux noms désignent-ils le même club ? (« Dortmund » ≡ « Borussia Dortmund »). */
+export function sameTeam(a: string, b: string): boolean {
+  if (norm(a) === norm(b)) return true;
+  const pa = findProfile(a);
+  return !!pa && pa === findProfile(b);
+}
+
 /**
- * Historique des 10 derniers matchs d'une équipe.
- * ⚠ L'API ne fournit pas d'historique : il est simulé de façon déterministe
- * à partir du profil du club (données de démonstration).
+ * MODE DÉMO UNIQUEMENT (Supabase non configuré) : historique simulé de façon
+ * déterministe à partir du profil du club. En production, l'historique réel
+ * vient de `getTeamHistory` dans `src/lib/db.ts`.
  */
-export function getTeamHistory(name: string, games = 10): TeamHistory {
+export function getSimulatedHistory(name: string, games = 10): TeamHistory {
   const p = findProfile(name);
   const seed = hashString(norm(name));
   const rnd = mulberry32(seed);

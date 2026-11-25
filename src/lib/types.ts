@@ -5,6 +5,9 @@ export interface Team {
   short: string;
   /** Couleurs principales utilisées pour l'écusson généré (pas de logo officiel). */
   colors: [string, string];
+  /** Id dans la table Supabase `teams`, si l'équipe y existe. */
+  dbId?: number;
+  logoUrl?: string | null;
 }
 
 export type MatchStatus = 'upcoming' | 'live' | 'finished';
@@ -25,4 +28,8 @@ export interface MatchWithPrediction extends Match {
   awayHistory: TeamHistory;
 }
 
-export type DataSource = 'api' | 'fallback';
+/** Origine des matchs affichés : API Melbet, base Supabase ou données de démo. */
+export type DataSource = 'api' | 'database' | 'fallback';
+
+/** État de la base : non configurée (mode démo), connectée, ou en erreur. */
+export type DbState = 'disabled' | 'connected' | 'error';
