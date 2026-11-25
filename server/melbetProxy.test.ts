@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { endpointFrom, handleMelbet, handleMelbetOddsRequest, handleMelbetRequest, MELBET_ORIGIN } from './melbetProxy';
+import { endpointFrom, handleMelbet, handleMelbetOddsRequest, handleMelbetRequest, hasLeagueGames, MELBET_ORIGIN, resetLeagueDiscovery } from './melbetProxy';
 
 const ok = (body = '{"data":[]}', status = 200) =>
   vi.fn(async () => new Response(body, { status, headers: { 'content-type': 'application/json' } }));
@@ -104,5 +104,48 @@ describe('diagnostic /api/melbet-odds?probe=1', () => {
     expect(body.attempts).toHaveLength(5);
     expect(body.attempts.every((a: { url: string }) => a.url.includes('774050947'))).toBe(true);
     expect(body.attempts.find((a: { url: string }) => a.url.includes('/LineFeed/mobile/v3/GetGame')).status).toBe(200);
+  });
+});
+
+describe('route /api/melbet-league', () => {
+  const withGames = (id: number) => JSON.stringify({ data: [{ mainLigas: [
+    { id: 2812138, name: 'FC25. Penalty', games: [{ id: 1, opponent1: { fullName: 'A' }, opponent2: { fullName: 'B' } }] },
+    { id, name: 'FC26. Penalty', games: [{ id: 2, opponent1: { fullName: 'C' }, opponent2: { fullName: 'D' } }] },
+  ] }] });
+  const ignoresParam = JSON.stringify({ data: [{ mainLigas: [
+    { id: 2812138, name: 'FC25. Penalty', games: [{ id: 1 }] }, { id: 2952096, name: 'FC26. Penalty', gamesCount: 4 },
+  ] }] });
+
+  it('hasLeagueGames : ne se laisse pas tromper par une réponse qui ignore le paramètre', () => {
+    expect(hasLeagueGames(JSON.parse(ignoresParam), 2952096)).toBe(false);
+    expect(hasLeagueGames(JSON.parse(withGames(2952096)), 2952096)).toBe(true);
+  });
+
+  it('découvre la variante qui marche puis la réutilise seule', async () => {
+    resetLeagueDiscovery();
+    const f = vi.fn(async (url: string) =>
+      url.includes('champId=2952096') && url.includes('/ChampsBySport') ? new Response(withGames(2952096)) : new Response(ignoresParam));
+    const res = await handleMelbet(new Request('https://x.app/api/melbet-league?champId=2952096'), f as unknown as typeof fetch);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-melbet-variant')).toBe('1');
+    expect(f).toHaveBeenCalledTimes(2); // champIds= (ignoré) puis champId= (ok)
+    f.mockClear();
+    await handleMelbet(new Request('https://x.app/api/melbet-league?champId=2952096'), f as unknown as typeof fetch);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('aucune variante : 404, puis pause avant de réessayer', async () => {
+    resetLeagueDiscovery();
+    const f = vi.fn(async () => new Response(ignoresParam));
+    expect((await handleMelbet(new Request('https://x.app/api/melbet-league?champId=2952096'), f as unknown as typeof fetch)).status).toBe(404);
+    f.mockClear();
+    expect((await handleMelbet(new Request('https://x.app/api/melbet-league?champId=2952096'), f as unknown as typeof fetch)).status).toBe(404);
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('valide champId', async () => {
+    const f = vi.fn();
+    expect((await handleMelbet(new Request('https://x.app/api/melbet-league?champId=1%26x'), f as unknown as typeof fetch)).status).toBe(400);
+    expect(f).not.toHaveBeenCalled();
   });
 });

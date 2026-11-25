@@ -4,8 +4,21 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/melbet-odds", "destination": "/api/melbet?route=odds" },
-    { "source": "/api/melbet/:path*", "destination": "/api/melbet?path=:path*" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/api/melbet-odds",
+      "destination": "/api/melbet?route=odds"
+    },
+    {
+      "source": "/api/melbet-league",
+      "destination": "/api/melbet?route=league"
+    },
+    {
+      "source": "/api/melbet/:path*",
+      "destination": "/api/melbet?path=:path*"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }

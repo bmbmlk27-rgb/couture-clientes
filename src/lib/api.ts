@@ -1,4 +1,4 @@
-import type { Match, MatchStatus } from './types';
+import type { League, Match, MatchStatus } from './types';
 import { isValidOdds, oddsFromGameNode, type Odds } from './odds';
 import { resolveTeam } from '../data/teams';
 
@@ -28,7 +28,10 @@ export const CHAMPS_QUERY = 'cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportI
 const TIMEOUT_MS = 8000;
 
 export interface FetchResult {
-  matches: Match[] | null;
+  /** Championnats FIFA annoncés par Melbet (null si l'API est indisponible). */
+  leagues: League[] | null;
+  /** Matchs détaillés dans la réponse (en général ceux d'un seul championnat). */
+  matches: Match[];
   error?: string;
   latencyMs?: number;
 }
@@ -43,17 +46,32 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-/** Récupère les matchs Penalty ; `matches: null` si l'API est indisponible. */
-export async function fetchMatches(): Promise<FetchResult> {
+const errorText = (error: unknown) =>
+  error instanceof Error ? (error.name === 'AbortError' ? 'Délai dépassé' : error.message) : String(error);
+
+/** Liste des championnats FIFA et matchs détaillés (ChampsBySport). */
+export async function fetchChampionships(): Promise<FetchResult> {
   const t0 = performance.now();
   try {
     const response = await fetchWithTimeout(`${API_BASE_URL}/ChampsBySport?${CHAMPS_QUERY}`, { headers: HEADERS });
-    if (!response.ok) return { matches: null, error: `HTTP ${response.status}` };
-    const matches = extractMatches(await response.json());
-    return { matches, latencyMs: Math.round(performance.now() - t0) };
+    if (!response.ok) return { leagues: null, matches: [], error: `HTTP ${response.status}` };
+    const data = await response.json();
+    return { leagues: extractLeagues(data), matches: extractMatches(data), latencyMs: Math.round(performance.now() - t0) };
   } catch (error) {
-    const msg = error instanceof Error ? (error.name === 'AbortError' ? 'Délai dépassé' : error.message) : String(error);
-    return { matches: null, error: msg };
+    return { leagues: null, matches: [], error: errorText(error) };
+  }
+}
+
+export const LEAGUE_URL: string = import.meta.env.VITE_LEAGUE_URL ?? '/api/melbet-league';
+
+/** Matchs d'un championnat précis (via le relais) ; null si Melbet ne les fournit pas. */
+export async function fetchLeagueMatches(leagueId: number): Promise<Match[] | null> {
+  try {
+    const response = await fetchWithTimeout(`${LEAGUE_URL}?champId=${leagueId}`, {});
+    if (!response.ok) return null;
+    return extractMatches(await response.json()).filter((m) => m.leagueId === leagueId);
+  } catch {
+    return null;
   }
 }
 
@@ -68,6 +86,34 @@ const str = (v: unknown): string | undefined =>
 
 /** Ligues de séances de tirs au but (« FC25. Penalty », « FIFA23. Penalty », « Penalty »…). */
 export const PENALTY_RE = /penalt/i;
+
+/** Championnats annoncés (data[].mainLigas[]) : id, nom, pays, nombre de matchs. */
+export function extractLeagues(data: unknown): League[] {
+  const out: League[] = [];
+  const seen = new Set<number>();
+  const walk = (node: unknown, depth: number) => {
+    if (depth > 8) return;
+    if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
+    if (!isObj(node)) return;
+    if (Array.isArray(node.mainLigas)) {
+      for (const l of node.mainLigas) {
+        if (!isObj(l) || typeof l.id !== 'number' || typeof l.name !== 'string' || seen.has(l.id)) continue;
+        seen.add(l.id);
+        out.push({
+          id: l.id,
+          name: l.name,
+          country: typeof l.countryName === 'string' ? l.countryName : undefined,
+          gamesCount: typeof l.gamesCount === 'number' ? l.gamesCount : 0,
+          kind: PENALTY_RE.test(l.name) ? 'penalty' : 'match',
+        });
+      }
+      return;
+    }
+    for (const v of Object.values(node)) if (typeof v === 'object') walk(v, depth + 1);
+  };
+  walk(data, 0);
+  return out;
+}
 
 function teamNames(g: Obj): [string, string] | null {
   const pairs: [unknown, unknown][] = [
@@ -116,10 +162,10 @@ export function extractMatches(data: unknown): Match[] {
   const found: Match[] = [];
   const seen = new Set<string>();
 
-  const walk = (node: unknown, league: string, depth: number) => {
+  const walk = (node: unknown, league: string, leagueId: number | undefined, depth: number) => {
     if (depth > 8) return;
     if (Array.isArray(node)) {
-      node.forEach((n) => walk(n, league, depth + 1));
+      node.forEach((n) => walk(n, league, leagueId, depth + 1));
       return;
     }
     if (!isObj(node)) return;
@@ -133,7 +179,9 @@ export function extractMatches(data: unknown): Match[] {
         seen.add(id);
         found.push({
           id,
-          league: ownLeague || 'FC 26',
+          league: ownLeague || 'FIFA',
+          leagueId: typeof node.champId === 'number' ? node.champId : leagueId,
+          kind: PENALTY_RE.test(ownLeague) ? 'penalty' : 'match',
           home: resolveTeam(names[0]),
           away: resolveTeam(names[1]),
           startsAt,
@@ -146,15 +194,15 @@ export function extractMatches(data: unknown): Match[] {
       }
       return;
     }
-    // Pour un conteneur de ligue, son propre nom devient le contexte des enfants.
-    const ctx = isObj(node) && (Array.isArray(node.games) || Array.isArray(node.G))
-      ? str(node.name ?? node.title ?? node.L) ?? ownLeague
-      : ownLeague;
-    for (const v of Object.values(node)) if (typeof v === 'object') walk(v, ctx, depth + 1);
+    // Pour un conteneur de ligue, son nom et son id deviennent le contexte des enfants.
+    const isLeague = Array.isArray(node.games) || Array.isArray(node.G);
+    const ctx = isLeague ? str(node.name ?? node.title ?? node.L) ?? ownLeague : ownLeague;
+    const ctxId = isLeague && typeof node.id === 'number' ? node.id : leagueId;
+    for (const v of Object.values(node)) if (typeof v === 'object') walk(v, ctx, ctxId, depth + 1);
   };
 
-  walk(data, '', 0);
-  return found.filter((m) => PENALTY_RE.test(m.league)).sort((a, b) => a.startsAt - b.startsAt);
+  walk(data, '', undefined, 0);
+  return found.sort((a, b) => a.startsAt - b.startsAt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -164,8 +212,8 @@ export function extractMatches(data: unknown): Match[] {
 export const ODDS_URL: string = import.meta.env.VITE_ODDS_URL ?? '/api/melbet-odds';
 const ODDS_TTL_MS = 20_000;
 const ODDS_TIMEOUT_MS = 5000;
-const ODDS_CONCURRENCY = 4;
-const ODDS_MAX_GAMES = 30;
+const ODDS_CONCURRENCY = 6;
+const ODDS_MAX_GAMES = 80;
 
 const oddsCache = new Map<string, { at: number; odds: Odds | null }>();
 

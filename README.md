@@ -1,13 +1,15 @@
-# MLK FIFA Virtuel — Penalty
+# MLK FIFA Virtuel
 
-Prédictions des séances de tirs au but virtuelles (ligues « Penalty » de Melbet : FC25, FC26, FIFA23…).
+Liste de tous les championnats FIFA virtuels de Melbet, avec leurs matchs et une prédiction calée sur les cotes :
+séance de tirs au but pour les ligues « Penalty », match classique (Poisson) pour les autres.
 React + TypeScript (Vite), Tailwind CSS, Framer Motion, Lucide React. Déployé sur Cloudflare Workers.
 
 ```
 src/lib/penaltyEngine.ts      moteur de séance de tirs au but, calé sur les cotes
+src/lib/matchEngine.ts        moteur de match classique (Poisson calé sur les cotes 1X2)
 src/lib/odds.ts               cotes vainqueur (1X2 ou 2 issues), probabilités implicites
-src/lib/api.ts                liste des matchs Penalty (ChampsBySport) et cotes (GetGame)
-src/hooks/usePenaltyMatches.ts  chargement, cotes et prédictions, rafraîchi toutes les 20 s
+src/lib/api.ts                championnats et matchs (ChampsBySport, /api/melbet-league), cotes (GetGame)
+src/hooks/useChampionships.ts  chargement, cotes et prédictions, rafraîchi toutes les 30 s
 server/melbetProxy.ts         relais API Melbet (partagé Cloudflare / Vercel / Netlify / dev)
 worker/index.ts               Worker Cloudflare : relais Melbet + fichiers statiques
 ```
@@ -22,7 +24,11 @@ npm test
 
 Aucune variable d'environnement n'est nécessaire.
 
-## Le modèle
+## Matchs classiques (championnats hors Penalty)
+
+Les buts attendus (λ dom., λ ext.) sont ajustés pour que les probabilités Poisson 1/N/2 collent aux cotes 1X2 (marge retirée, moindres carrés, scores jusqu'à 25 buts pour les formats 3x3/4x4/5x5). Vainqueur et confiance = probabilités du marché ; score exact et mi-temps = scores les plus probables. Il faut les cotes 1X2 complètes (avec le nul).
+
+## Le modèle Penalty
 
 ### Déroulé d'une séance
 
@@ -62,8 +68,11 @@ Les matchs virtuels sont tirés au sort par un générateur : le modèle traduit
 | `/api/melbet/ChampsBySport?…` | `ChampsBySport` (liste des ligues et matchs) | JSON Melbet brut, cache 15 s |
 | `/api/melbet-odds?gameId=123` | `GetGame?gameId=123&cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&whence=22` | `{ "home": 1.62, "away": 2.25 }` ou avec `"draw"` |
 | `/api/melbet-odds?gameId=123&debug=1` | idem | réponse GetGame brute (diagnostic) |
+| `/api/melbet-odds?probe=1` | ChampsBySport puis 5 variantes de GetGame | statut et début de chaque réponse (diagnostic) |
+| `/api/melbet-league?champId=123` | variantes testées jusqu'à trouver les matchs de ce championnat | JSON Melbet brut, en-tête `x-melbet-variant` |
+| `/api/melbet-league?champId=123&debug=1` | toutes les variantes | statut et début de chaque réponse (diagnostic) |
 
-Le site appelle `ChampsBySport?cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22` (sans `gr=2710`, Melbet répond 400) et ne garde que les ligues dont le nom contient « Penalty ». Il lit les matchs au format mobile v3 (`opponent1.fullName`, `opponent2.fullName`, `startTs`, `nonStarted`, `scores`).
+Le site appelle `ChampsBySport?cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22` (sans `gr=2710`, Melbet répond 400) et lit la liste `mainLigas` (id, nom, pays, nombre de matchs). Cette réponse ne détaille les matchs que d'un championnat : pour les autres, le site appelle `/api/melbet-league`. Le relais y essaie plusieurs requêtes plausibles (`champIds=`, `champId=`, `GetChampGames`…) et garde la première qui renvoie bien des matchs de ce championnat ; si aucune ne marche, le championnat est affiché « détails indisponibles » (nouvel essai après 5 min). Il lit les matchs au format mobile v3 (`opponent1.fullName`, `opponent2.fullName`, `startTs`, `nonStarted`, `scores`).
 
 Le relais ajoute les en-têtes Melbet et coupe au bout de 8 s. `gameId` doit être un entier (sinon 400). Il répond 404 si le marché vainqueur est absent, 502/504 si Melbet refuse ou ne répond pas.
 

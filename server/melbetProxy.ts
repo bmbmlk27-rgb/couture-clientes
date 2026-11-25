@@ -205,6 +205,102 @@ export async function handleMelbetProbe(fetchImpl: typeof fetch = fetch): Promis
 }
 
 /* ------------------------------------------------------------------ */
+/* Route /api/melbet-league?champId=… : matchs d'un championnat         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ChampsBySport ne détaille les matchs que d'un seul championnat. Pour les
+ * autres, on essaie plusieurs requêtes plausibles (l'API n'est pas documentée)
+ * et on retient, pour la durée de vie du Worker, la première qui renvoie bien
+ * des matchs de CE championnat.
+ */
+const MELBET_HOST = MELBET_ORIGIN.replace(/\/MainFeedLive\/mobile\/v3$/, '');
+export const LEAGUE_VARIANTS: ((id: string) => string)[] = [
+  (id) => `${MELBET_ORIGIN}/ChampsBySport?${CHAMPS_QUERY}&champIds=${id}`,
+  (id) => `${MELBET_ORIGIN}/ChampsBySport?${CHAMPS_QUERY}&champId=${id}`,
+  (id) => `${MELBET_ORIGIN}/ChampsBySport?${CHAMPS_QUERY}&ligaId=${id}`,
+  (id) => `${MELBET_ORIGIN}/GetChampGames?champId=${id}&${GET_GAME_PARAMS}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champId=${id}&${GET_GAME_PARAMS}`,
+  (id) => `${MELBET_ORIGIN}/Games?champIds=${id}&${CHAMPS_QUERY}`,
+  (id) => `${MELBET_ORIGIN}/GetChamp?champId=${id}&${GET_GAME_PARAMS}`,
+  (id) => `${MELBET_HOST}/LineFeed/mobile/v3/ChampsBySport?${CHAMPS_QUERY}&champIds=${id}`,
+];
+
+/** La réponse contient-elle des matchs du championnat `id` ? */
+export function hasLeagueGames(data: unknown, id: number): boolean {
+  let found = false;
+  const walk = (node: unknown, depth: number) => {
+    if (found || depth > 10) return;
+    if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
+    if (!isObj(node)) return;
+    if (Number(node.id) === id && Array.isArray(node.games) && node.games.length > 0) { found = true; return; }
+    if (Number(node.champId ?? node.leagueId ?? node.ligaId) === id && (node.opponent1 || node.O1)) { found = true; return; }
+    for (const v of Object.values(node)) if (typeof v === 'object') walk(v, depth + 1);
+  };
+  walk(data, 0);
+  return found;
+}
+
+let workingLeagueVariant: number | null = null;
+let noVariantUntil = 0;
+const NO_VARIANT_RETRY_MS = 5 * 60_000;
+
+/** Pour les tests. */
+export function resetLeagueDiscovery() {
+  workingLeagueVariant = null;
+  noVariantUntil = 0;
+}
+
+export async function handleMelbetLeagueRequest(request: Request, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  if (request.method !== 'GET') return json(405, { error: 'Méthode non autorisée' });
+  const params = new URL(request.url).searchParams;
+  const champId = params.get('champId') ?? '';
+  const debug = params.get('debug') === '1';
+  if (!/^\d{1,12}$/.test(champId)) return json(400, { error: 'Paramètre champId manquant ou invalide (entier attendu)' });
+  if (!debug && workingLeagueVariant === null && Date.now() < noVariantUntil) {
+    return json(404, { error: 'Aucune requête Melbet connue ne renvoie les matchs de ce championnat' });
+  }
+
+  const order = workingLeagueVariant === null || debug
+    ? LEAGUE_VARIANTS.map((_, i) => i)
+    : [workingLeagueVariant];
+  const attempts: { variant: number; url: string; status: number; body?: string }[] = [];
+  for (const i of order) {
+    const url = LEAGUE_VARIANTS[i](champId);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const r = await fetchImpl(url, { headers: MELBET_HEADERS, signal: ctrl.signal });
+      const body = await r.text();
+      attempts.push({ variant: i, url, status: r.status, ...(debug ? { body: body.slice(0, 1500) } : {}) });
+      if (!r.ok) continue;
+      let data: unknown;
+      try { data = JSON.parse(body); } catch { continue; }
+      if (!hasLeagueGames(data, Number(champId))) continue;
+      workingLeagueVariant = i;
+      if (debug) continue; // en diagnostic, on teste toutes les variantes
+      return new Response(body, {
+        status: 200,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'public, s-maxage=15, stale-while-revalidate=30',
+          'x-melbet-variant': String(i),
+        },
+      });
+    } catch (e) {
+      attempts.push({ variant: i, url, status: 0, body: e instanceof Error ? e.message : String(e) });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (debug) return json(200, { champId, workingVariant: workingLeagueVariant, attempts });
+  // La variante retenue a cessé de marcher : on relancera la découverte.
+  if (order.length === 1) workingLeagueVariant = null;
+  else noVariantUntil = Date.now() + NO_VARIANT_RETRY_MS;
+  return json(404, { error: 'Matchs de ce championnat indisponibles', attempts: attempts.map(({ variant, status }) => ({ variant, status })) });
+}
+
+/* ------------------------------------------------------------------ */
 /* Aiguillage commun                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -215,6 +311,9 @@ export function isOddsRoute(url: URL): boolean {
 
 export function handleMelbet(request: Request, fetchImpl: typeof fetch = fetch): Promise<Response> {
   const url = new URL(request.url);
+  if (url.searchParams.get('route') === 'league' || /\/melbet-league\/?$/.test(url.pathname)) {
+    return handleMelbetLeagueRequest(request, fetchImpl);
+  }
   if (isOddsRoute(url) && url.searchParams.get('probe') === '1') return handleMelbetProbe(fetchImpl);
   return isOddsRoute(url)
     ? handleMelbetOddsRequest(request, fetchImpl)

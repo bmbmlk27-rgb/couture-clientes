@@ -7,4 +7,4 @@ import { handleMelbet } from '../../server/melbetProxy';
 
 export default (request: Request) => handleMelbet(request);
 
-export const config = { path: ['/api/melbet/*', '/api/melbet-odds'] };
+export const config = { path: ['/api/melbet/*', '/api/melbet-odds', '/api/melbet-league'] };
