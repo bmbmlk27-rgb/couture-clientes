@@ -1,8 +1,9 @@
 import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle, Coins, Zap, Info } from 'lucide-react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import type { MatchWithPrediction } from '../lib/types';
 import type { PenaltyPrediction } from '../lib/penaltyEngine';
+import type { MatchPrediction } from '../lib/matchEngine';
 import { TeamCrest } from './TeamCrest';
 import { ScoreCountUp } from './CountUp';
 import { ConfidenceRing } from './ConfidenceRing';
@@ -34,7 +35,6 @@ function StatusPill({ m }: { m: MatchWithPrediction }) {
 }
 
 export function MatchCard({ match, index }: { match: MatchWithPrediction; index: number }) {
-  const p = match.prediction;
   const delay = 0.25 + (index % 9) * 0.05;
 
   // Inclinaison 3D qui suit le pointeur
@@ -53,7 +53,6 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
   };
   const onLeave = () => { mx.set(0.5); my.set(0.5); };
 
-  const winnerName = p?.winner === 'home' ? match.home.name : match.away.name;
 
   return (
     <motion.article
@@ -109,60 +108,12 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
             </div>
           )}
 
-          {/* Prédiction */}
-          {p ? (
-            <div className="mt-5 rounded-xl border border-white/[.06] bg-white/[.045] p-4" style={{ transform: 'translateZ(20px)' }}>
-              <div className="mb-3 flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.2em] text-neon">
-                  <Sigma className="h-3.5 w-3.5" /> Prédiction
-                </span>
-                <span
-                  title={`Cotes ${p.market === '1X2' ? '1X2 (N = égalité après 5 tirs)' : 'à 2 issues'} · marge bookmaker retirée : ${p.bookmakerMargin.toFixed(1)} %`}
-                  className="inline-flex items-center gap-1 rounded-md bg-gold/10 px-1.5 py-0.5 text-[10px] font-semibold text-gold ring-1 ring-gold/25"
-                >
-                  <Coins className="h-3 w-3" /> Basé sur les cotes
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <ScoreBox label="Score exact" score={p.topScores[0].score} delay={delay} highlight sub={`${p.topScores[0].probability.toFixed(1)} %`} />
-                <SuddenDeathBox value={p.suddenDeath} />
-              </div>
-
-              <OutcomeBar p={p} delay={delay + 0.1} />
-
-              {p.topScores[0].winner !== p.winner && (
-                <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-snug text-slate-400">
-                  <Info className="mt-px h-3.5 w-3.5 shrink-0 text-gold" />
-                  <span>
-                    Le score le plus probable ({p.topScores[0].score}) fait gagner l’autre équipe : le vainqueur additionne
-                    tous les scores possibles, et l’écart est faible.
-                  </span>
-                </p>
-              )}
-
-              <div className="mt-3 flex flex-wrap gap-1.5 font-mono text-[10px] text-slate-400">
-                <span className="uppercase tracking-[.14em] text-slate-500">Autres scores</span>
-                {p.topScores.slice(1).map((s) => (
-                  <span key={s.score} className="rounded bg-white/[.04] px-1.5 py-0.5">
-                    <span className="text-slate-200">{s.score}</span> · {s.probability.toFixed(1)} %
-                  </span>
-                ))}
-              </div>
-
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <ConfidenceRing value={p.confidence} delay={delay + 0.2} />
-                <div className="min-w-0 text-right">
-                  <div className="text-[10px] uppercase tracking-[.18em] text-slate-400">Vainqueur</div>
-                  <div className="truncate font-display text-base font-bold text-white">{winnerName}</div>
-                </div>
-              </div>
-            </div>
+          {match.kind === 'penalty' ? (
+            match.penalty ? <PenaltyBlock p={match.penalty} m={match} delay={delay} /> : <NoPrediction m={match} />
+          ) : match.match ? (
+            <MatchBlock p={match.match} m={match} delay={delay} />
           ) : (
-            <div className="mt-5 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 p-4 text-sm text-gold">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>Cotes indisponibles pour ce match : pas de prédiction (nouvelle tentative toutes les 20 s).</span>
-            </div>
+            <NoPrediction m={match} />
           )}
         </div>
       </motion.div>
@@ -172,17 +123,126 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
 
 function TeamBlock({ m, side }: { m: MatchWithPrediction; side: 'home' | 'away' }) {
   const team = side === 'home' ? m.home : m.away;
-  const conv = m.prediction?.conversion[side];
+  const conv = m.penalty?.conversion[side];
+  const lambda = m.match ? (side === 'home' ? m.match.lambdaHome : m.match.lambdaAway) : undefined;
+  const sub = conv !== undefined ? `${conv.toFixed(0)} % de réussite` : lambda !== undefined ? `${lambda.toFixed(2)} buts attendus` : '—';
   return (
     <div className="flex min-w-0 flex-col items-center gap-2 text-center">
       <TeamCrest team={team} side={side} size={60} />
       <div className="w-full min-w-0">
         <div className="truncate font-display text-[15px] font-semibold text-white" title={team.name}>{team.name}</div>
-        <div className="font-mono text-[10px] text-slate-500" title="Réussite estimée par tir au but">
-          {conv !== undefined ? `${conv.toFixed(0)} % de réussite` : '—'}
-        </div>
+        <div className="font-mono text-[10px] text-slate-500">{sub}</div>
       </div>
     </div>
+  );
+}
+
+function NoPrediction({ m }: { m: MatchWithPrediction }) {
+  const text = !m.odds
+    ? 'Cotes indisponibles pour ce match : pas de prédiction (nouvelle tentative toutes les 30 s).'
+    : 'Cotes sans match nul : le modèle de match a besoin des cotes 1X2.';
+  return (
+    <div className="mt-5 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 p-4 text-sm text-gold">
+      <AlertTriangle className="h-4 w-4 shrink-0" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function PredictionShell({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="mt-5 rounded-xl border border-white/[.06] bg-white/[.045] p-4" style={{ transform: 'translateZ(20px)' }}>
+      <div className="mb-3 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.2em] text-neon">
+          <Sigma className="h-3.5 w-3.5" /> Prédiction
+        </span>
+        <span title={title} className="inline-flex items-center gap-1 rounded-md bg-gold/10 px-1.5 py-0.5 text-[10px] font-semibold text-gold ring-1 ring-gold/25">
+          <Coins className="h-3 w-3" /> Basé sur les cotes
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Verdict({ confidence, label, name, delay }: { confidence: number; label: string; name: string; delay: number }) {
+  return (
+    <div className="mt-4 flex items-center justify-between gap-3">
+      <ConfidenceRing value={confidence} delay={delay} />
+      <div className="min-w-0 text-right">
+        <div className="text-[10px] uppercase tracking-[.18em] text-slate-400">{label}</div>
+        <div className="truncate font-display text-base font-bold text-white">{name}</div>
+      </div>
+    </div>
+  );
+}
+
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-snug text-slate-400">
+      <Info className="mt-px h-3.5 w-3.5 shrink-0 text-gold" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+function PenaltyBlock({ p, m, delay }: { p: PenaltyPrediction; m: MatchWithPrediction; delay: number }) {
+  return (
+    <PredictionShell title={`Cotes ${p.market === '1X2' ? '1X2 (N = égalité après 5 tirs)' : 'à 2 issues'} · marge bookmaker retirée : ${p.bookmakerMargin.toFixed(1)} %`}>
+      <div className="grid grid-cols-2 gap-3">
+        <ScoreBox label="Score exact" score={p.topScores[0].score} delay={delay} highlight sub={`${p.topScores[0].probability.toFixed(1)} %`} />
+        <SuddenDeathBox value={p.suddenDeath} />
+      </div>
+      <OutcomeBar
+        parts={[
+          { key: '1', v: p.probabilities.home, on: p.winner === 'home', color: 'bg-neon' },
+          { key: '2', v: p.probabilities.away, on: p.winner === 'away', color: 'bg-gold' },
+        ]}
+        delay={delay + 0.1}
+      />
+      {p.topScores[0].winner !== p.winner && (
+        <Note>
+          Le score le plus probable ({p.topScores[0].score}) fait gagner l’autre équipe : le vainqueur additionne tous les scores
+          possibles, et l’écart est faible.
+        </Note>
+      )}
+      <div className="mt-3 flex flex-wrap gap-1.5 font-mono text-[10px] text-slate-400">
+        <span className="uppercase tracking-[.14em] text-slate-500">Autres scores</span>
+        {p.topScores.slice(1).map((s) => (
+          <span key={s.score} className="rounded bg-white/[.04] px-1.5 py-0.5">
+            <span className="text-slate-200">{s.score}</span> · {s.probability.toFixed(1)} %
+          </span>
+        ))}
+      </div>
+      <Verdict confidence={p.confidence} delay={delay + 0.2} label="Vainqueur" name={p.winner === 'home' ? m.home.name : m.away.name} />
+    </PredictionShell>
+  );
+}
+
+function MatchBlock({ p, m, delay }: { p: MatchPrediction; m: MatchWithPrediction; delay: number }) {
+  const name = p.winner === 'Domicile' ? m.home.name : p.winner === 'Extérieur' ? m.away.name : 'Match nul';
+  return (
+    <PredictionShell title={`Cotes 1X2 + Poisson · marge bookmaker retirée : ${p.bookmakerMargin.toFixed(1)} %`}>
+      <div className="grid grid-cols-2 gap-3">
+        <ScoreBox label="Mi-temps" score={p.halfTimeScore} delay={delay} />
+        <ScoreBox label="Score exact" score={p.fullTimeScore} delay={delay + 0.15} highlight sub={`${p.fullTimeScoreProbability.toFixed(1)} %`} />
+      </div>
+      <OutcomeBar
+        parts={[
+          { key: '1', v: p.probabilities.home, on: p.winner === 'Domicile', color: 'bg-neon' },
+          { key: 'N', v: p.probabilities.draw, on: p.winner === 'Match Nul', color: 'bg-slate-400' },
+          { key: '2', v: p.probabilities.away, on: p.winner === 'Extérieur', color: 'bg-gold' },
+        ]}
+        delay={delay + 0.1}
+      />
+      {!p.scoreMatchesWinner && (
+        <Note>
+          Le score exact le plus probable ({p.fullTimeScore}) ne désigne pas l’issue la plus probable ({p.winner}) : la tendance 1N2
+          additionne tous les scores possibles.
+        </Note>
+      )}
+      <Verdict confidence={p.confidence} delay={delay + 0.2} label={p.winner} name={name} />
+    </PredictionShell>
   );
 }
 
@@ -213,12 +273,8 @@ function ScoreBox({ label, score, delay, highlight, sub }: { label: string; scor
   );
 }
 
-/** Barre domicile / extérieur : probabilité de gagner la séance (mort subite comprise). */
-function OutcomeBar({ p, delay }: { p: PenaltyPrediction; delay: number }) {
-  const parts = [
-    { key: '1', v: p.probabilities.home, on: p.winner === 'home', color: 'bg-neon' },
-    { key: '2', v: p.probabilities.away, on: p.winner === 'away', color: 'bg-gold' },
-  ];
+/** Barre de probabilités par issue (1 / N / 2 ou 1 / 2). */
+function OutcomeBar({ parts, delay }: { parts: { key: string; v: number; on: boolean; color: string }[]; delay: number }) {
   return (
     <div className="mt-3">
       <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full bg-white/5">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractMatches } from './api';
+import { extractLeagues, extractMatches } from './api';
 
 /** Extrait de la vraie réponse ChampsBySport (sportIds=85) reçue via le relais Cloudflare. */
 const game = (id: number, a: string, b: string, extra: Record<string, unknown> = {}) => ({
@@ -26,10 +26,24 @@ const payload = {
   }],
 };
 
-describe('extractMatches (Penalty)', () => {
-  it('ne garde que les ligues Penalty', () => {
+describe('extractLeagues', () => {
+  it('liste tous les championnats annoncés avec id, pays, nombre de matchs et type', () => {
+    const ls = extractLeagues(payload);
+    expect(ls).toHaveLength(5);
+    expect(ls[1]).toEqual({ id: 3074685, name: "FC 26. Championnat d'Allemagne", country: undefined, gamesCount: 4, kind: 'match' });
+    expect(ls[2].kind).toBe('penalty');
+  });
+});
+
+describe('extractMatches', () => {
+  it('garde tous les championnats, avec leur id et leur type', () => {
     const ms = extractMatches(payload);
-    expect(ms.map((m) => m.league)).toEqual(['FC25. Penalty', 'FC26. Penalty']);
+    expect(ms).toHaveLength(3);
+    expect(ms.map((m) => [m.league, m.leagueId, m.kind])).toEqual(expect.arrayContaining([
+      ['FC25. Penalty', 2812138, 'penalty'],
+      ['FC 26. Championnat d’Espagne', 3000000, 'match'],
+      ['FC26. Penalty', 2952096, 'penalty'],
+    ]));
   });
 
   it('lit opponent1/opponent2, startTs, nonStarted et l’id Melbet', () => {

@@ -35,7 +35,7 @@ export function Header({ apiConnected, apiError, latency, loading, updatedAt, on
           <h1 className="animate-gradient-x truncate bg-gradient-to-r from-neon via-gold to-neon bg-[length:200%_auto] bg-clip-text font-display text-xl font-bold uppercase tracking-wide text-transparent sm:text-2xl">
             MLK FIFA Virtuel
           </h1>
-          <p className="hidden text-[11px] uppercase tracking-[.22em] text-slate-500 sm:block">Penalty · Séance de tirs au but</p>
+          <p className="hidden text-[11px] uppercase tracking-[.22em] text-slate-500 sm:block">Penalty · Matchs · Prédictions</p>
         </div>
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">

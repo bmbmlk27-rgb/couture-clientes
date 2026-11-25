@@ -12,7 +12,7 @@ import { handleMelbet } from './server/melbetProxy';
 function melbetRelay(): Plugin {
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const url = req.url ?? '';
-    if (!/^\/api\/melbet(-odds)?(\/|\?|$)/.test(url)) return next();
+    if (!/^\/api\/melbet(-odds|-league)?(\/|\?|$)/.test(url)) return next();
     try {
       const response = await handleMelbet(new Request(`http://localhost${url}`, { method: req.method }));
       res.statusCode = response.status;
