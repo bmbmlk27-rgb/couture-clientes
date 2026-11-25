@@ -10,6 +10,7 @@ import { useMatches } from './hooks/useMatches';
 import { GERMAN_LEAGUE } from './data/teams';
 import type { DataSource, DbState, MatchWithPrediction } from './lib/types';
 import { AVG_LEAGUE_GOALS } from './lib/config';
+import { supabaseMissingVars } from './lib/supabase';
 
 type TabId = 'all' | 'live' | 'upcoming' | 'hot';
 const HIGH_CONFIDENCE = 55;
@@ -209,7 +210,13 @@ function StatusBanner({ source, apiError, dbState, dbError }: { source: DataSour
   } else if (dbState === 'disabled') {
     msg = (
       <>
-        <strong>Mode démo</strong> : Supabase n’est pas configuré (voir <code className="font-mono">.env.example</code>), les historiques sont simulés.
+        <strong>Mode démo</strong> : Supabase n’est pas configuré, les historiques sont simulés.
+        {supabaseMissingVars && (
+          <>
+            {' '}Variable(s) absente(s) lors du build : <code className="font-mono">{supabaseMissingVars}</code>.
+            Ajoutez-les dans Vercel (Settings → Environment Variables, environnement « Production ») puis relancez un déploiement.
+          </>
+        )}
         {source === 'fallback' && <> API Melbet indisponible ({apiError ?? 'erreur inconnue'}) : matchs de test affichés.</>}
       </>
     );

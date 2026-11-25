@@ -100,7 +100,7 @@ Le panneau `/admin` utilise ce compte. Il n'y a pas de mot de passe codé en dur
 | `VITE_API_BASE_URL` | URL du relais Melbet (défaut `/api/melbet`) | non |
 
 - **En local** : dans `.env.local` (ignoré par git).
-- **Sur Vercel / Netlify** : dans les réglages du projet (voir ci-dessous). Les variables `VITE_*` sont intégrées **au moment du build** : après les avoir modifiées, relancez un déploiement.
+- **Sur Vercel / Netlify** : dans les réglages du projet (voir ci-dessous). Les variables sont intégrées **au moment du build** : après les avoir modifiées, relancez un déploiement. Les noms de l'intégration Supabase de Vercel (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_ANON_KEY`…) sont aussi acceptés.
 
 ### 5. Déployer
 
@@ -137,6 +137,28 @@ vercel --prod
    `netlify.toml` fixe la commande (`npm run build`), le dossier publié (`dist`) et les fonctions (`netlify/functions`).
 2. **Site configuration → Environment variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`.
 3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` et `/api/melbet-odds` (`config.path`), et les autres routes renvoient `index.html`.
+
+#### Le site sort en « mode démo » sur Vercel
+
+Le mode démo signifie que l'URL ou la clé Supabase était **absente au moment du build**. Le bandeau du site indique la variable manquante, et le log de build Vercel (*Deployments → (le déploiement) → Building*) affiche l'une de ces lignes :
+
+```
+[MLK] ⚠ Supabase NON configuré — le site sera en MODE DÉMO. Variables manquantes : …
+[MLK] ✓ Supabase configuré (VITE_SUPABASE_URL → https://xxxx.supabase.co, clé : VITE_SUPABASE_ANON_KEY)
+```
+
+Causes possibles, par ordre de fréquence :
+
+1. **Variables ajoutées après le déploiement.** Elles ne sont lues qu'au build : *Deployments → ⋯ → Redeploy*, en décochant *Use existing Build Cache*.
+2. **Mauvais environnement.** La variable doit être cochée pour **Production** (et Preview si besoin), pas seulement Development.
+3. **Nom mal orthographié.** Noms acceptés :
+   - URL : `VITE_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL` ou `SUPABASE_URL` ;
+   - clé : `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_ANON_KEY`, etc.
+
+   Les noms créés par l'intégration Supabase de Vercel conviennent donc aussi.
+4. **Mauvaise clé.** Utilisez la clé **anon public** (onglet *Legacy API keys*) ou **publishable** (`sb_publishable_…`). Une clé secrète (`service_role` ou `sb_secret_…`) **fait échouer le build** volontairement : elle serait publiée dans le JavaScript du site.
+
+Les espaces, les guillemets, un `/` final ou un `https://` manquant dans l'URL sont corrigés automatiquement.
 
 #### Vérification après déploiement
 
