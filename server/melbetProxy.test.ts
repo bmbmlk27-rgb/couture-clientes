@@ -102,6 +102,7 @@ describe('diagnostic /api/melbet-odds?probe=1', () => {
     const body = await res.json();
     expect(body.game).toMatchObject({ id: 774050947, label: 'PSG - Al Nassr' });
     expect(body.attempts).toHaveLength(5);
+    expect(Array.isArray(body.existingEndpoints)).toBe(true);
     expect(body.attempts.every((a: { url: string }) => a.url.includes('774050947'))).toBe(true);
     expect(body.attempts.find((a: { url: string }) => a.url.includes('/LineFeed/mobile/v3/GetGame')).status).toBe(200);
   });
