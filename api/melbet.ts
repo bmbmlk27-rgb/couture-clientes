@@ -1,9 +1,11 @@
 /**
- * Fonction serverless Vercel — relais API Melbet.
- * `vercel.json` réécrit /api/melbet/<endpoint>?… vers /api/melbet?path=<endpoint>&…
+ * Fonction serverless Vercel — relais API Melbet (deux routes).
+ * `vercel.json` réécrit :
+ *   /api/melbet/<endpoint>?…  → /api/melbet?path=<endpoint>&…   (liste des matchs)
+ *   /api/melbet-odds?gameId=… → /api/melbet?route=odds&gameId=… (cotes 1X2)
  */
-import { handleMelbetRequest } from '../server/melbetProxy';
+import { handleMelbet } from '../server/melbetProxy';
 
 export function GET(request: Request): Promise<Response> {
-  return handleMelbetRequest(request);
+  return handleMelbet(request);
 }

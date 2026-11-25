@@ -8,7 +8,8 @@ src/lib/predictionEngine.ts   moteur Double Poisson
 src/lib/db.ts                 requêtes Supabase (historique, matchs, prédictions)
 src/lib/supabase.ts           client Supabase (lit les variables d'environnement)
 src/admin/                    panneau /admin
-server/melbetProxy.ts         relais API Melbet (partagé Vercel / Netlify)
+server/melbetProxy.ts         relais API Melbet : liste des matchs + cotes 1X2 (partagé Vercel / Netlify / dev)
+src/lib/odds.ts               extraction du marché 1X2, probabilités implicites
 api/melbet.ts                 fonction serverless Vercel
 netlify/functions/melbet.ts   fonction serverless Netlify
 supabase/schema.sql           tables, sécurité (RLS), équipes de départ
@@ -25,7 +26,21 @@ npm test
 
 Sans `.env.local`, l'app tourne en **mode démo** : historiques simulés, bandeau « Mode démo », aucune écriture possible.
 
-## Le modèle
+## Le modèle (hybride)
+
+Chaque carte indique la source de sa prédiction : **« Basé sur les cotes »** ou **« Basé sur l'historique »**.
+
+### 1. Avec cotes 1X2 (prioritaire)
+
+Les cotes viennent de l'API Melbet (`/api/melbet-odds`) ou d'une saisie manuelle dans `/admin`.
+
+1. Probabilités implicites : `pᵢ = (1/coteᵢ) / Σ(1/cote)`. La marge du bookmaker (`Σ(1/cote) − 1`) est retirée.
+2. On cherche les buts attendus (λ domicile, λ extérieur) dont les probabilités Poisson 1/N/2 collent le mieux à celles du marché (moindres carrés, recherche sur grille affinée, ~1,5 ms).
+3. **Vainqueur et confiance** = probabilités du marché. **Score exact et mi-temps** = cases les plus probables de la matrice de Poisson construite avec ces λ.
+
+Aucun historique n'est nécessaire : un match « À venir » saisi avec ses cotes a une prédiction immédiatement.
+
+### 2. Sans cotes : Double Poisson sur l'historique
 
 Pour chaque équipe, on lit ses **10 derniers matchs terminés** dans la base, puis, avec `M = avgLeagueGoals` (2,5 par défaut, réglable via `VITE_AVG_LEAGUE_GOALS`) :
 
@@ -34,13 +49,9 @@ Pour chaque équipe, on lit ses **10 derniers matchs terminés** dans la base, p
 λ extérieur = (BM_ext / M) × (BE_dom / M) × M × 0,9
 ```
 
-BM = buts marqués en moyenne, BE = buts encaissés en moyenne. La matrice de Poisson 0–8 × 0–8 donne :
+BM = buts marqués en moyenne, BE = buts encaissés en moyenne. Une équipe « moyenne » obtient λ = M × 1,1 : **M doit donc être la moyenne de buts par équipe et par match** (ex. 1,25 si la ligue fait 2,5 buts par match au total).
 
-- **le score exact le plus probable** (case maximale, plus de correction manuelle) ;
-- **le vainqueur** = l'issue 1 / N / 2 dont la somme des probabilités est la plus forte, la confiance étant cette probabilité.
-
-Les deux peuvent différer (ex. score exact 2-2 alors que « Domicile » est l'issue la plus probable) ; la carte l'indique.
-Une équipe avec moins de 3 matchs terminés n'a pas de prédiction (« Historique insuffisant »).
+Dans les deux cas, le score exact le plus probable n'est pas forcé pour coller au vainqueur : la carte signale quand ils diffèrent. Sans cotes et avec moins de 3 matchs terminés par équipe, la carte affiche « Historique insuffisant ».
 
 ---
 
@@ -56,6 +67,9 @@ Une équipe avec moins de 3 matchs terminés n'a pas de prédiction (« Historiq
    ⚠ N'utilisez jamais la clé `service_role` dans ce projet : les variables `VITE_*` sont visibles dans le JavaScript publié.
 
 ### 2. Exécuter le script SQL
+
+> **Mise à jour depuis une version précédente** : relancez simplement `supabase/schema.sql` en entier. Il ajoute sans rien effacer les colonnes de cotes (`odds_home`, `odds_draw`, `odds_away`), la colonne `predictions.basis` et le contrôle des URL de logo.
+
 
 1. **SQL Editor → New query**.
 2. Collez le contenu de [`supabase/schema.sql`](supabase/schema.sql), puis cliquez sur **Run**.
@@ -90,14 +104,22 @@ Le panneau `/admin` utilise ce compte. Il n'y a pas de mot de passe codé en dur
 
 ### 5. Déployer
 
-Le front appelle toujours `/api/melbet/ChampsBySport?...`. En développement, c'est le proxy de `vite.config.ts` qui répond ; en production, c'est une fonction serverless (`server/melbetProxy.ts`). Celle-ci ajoute les en-têtes Melbet, ne relaie que l'endpoint `ChampsBySport`, coupe au bout de 8 s et met la réponse en cache CDN 15 s.
+Le relais Melbet (`server/melbetProxy.ts`) sert deux routes, avec le même code en développement (`vite.config.ts`) et en production (fonction serverless) :
+
+| Route | Appel Melbet | Réponse |
+|---|---|---|
+| `/api/melbet/ChampsBySport?…` | `ChampsBySport` (liste des matchs) | JSON Melbet brut, cache CDN 15 s |
+| `/api/melbet-odds?gameId=123` | `GetGame?gameId=123&cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&whence=22` | `{ "home": 1.85, "draw": 3.6, "away": 4.1 }`, cache CDN 20 s |
+
+Le relais ajoute les en-têtes Melbet et coupe au bout de 8 s. `gameId` doit être un entier, sinon il répond 400. Il répond 404 si le marché 1X2 (groupe 1, types 1/2/3) est absent, et 502 ou 504 si Melbet refuse ou ne répond pas.
+Le front demande les cotes des matchs à venir qui n'en ont pas, avec 4 requêtes en parallèle, 30 matchs au maximum et un cache de 60 s.
 
 #### Option A — Vercel
 
 1. Poussez le dépôt sur GitHub.
 2. <https://vercel.com/new> → importez le dépôt. Le framework **Vite** est détecté (`vercel.json` fixe `npm run build` et `dist`).
 3. **Settings → Environment Variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` (Production + Preview).
-4. **Deploy**. `vercel.json` route `/api/melbet/*` vers `api/melbet.ts` et toutes les autres routes (dont `/admin`) vers `index.html`.
+4. **Deploy**. `vercel.json` route `/api/melbet/*` et `/api/melbet-odds` vers `api/melbet.ts`, et toutes les autres routes (dont `/admin`) vers `index.html`.
 
 En ligne de commande :
 
@@ -114,11 +136,12 @@ vercel --prod
 1. <https://app.netlify.com> → **Add new site → Import an existing project** → choisissez le dépôt.
    `netlify.toml` fixe la commande (`npm run build`), le dossier publié (`dist`) et les fonctions (`netlify/functions`).
 2. **Site configuration → Environment variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`.
-3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` (`config.path`), et les autres routes renvoient `index.html`.
+3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` et `/api/melbet-odds` (`config.path`), et les autres routes renvoient `index.html`.
 
 #### Vérification après déploiement
 
 - `https://<votre-site>/api/melbet/ChampsBySport?sportIds=85` doit renvoyer du JSON (ou une erreur 4xx/5xx de Melbet, mais pas la page HTML du site).
+- `https://<votre-site>/api/melbet-odds?gameId=abc` doit renvoyer **400** en JSON (preuve que la route est active).
 - Le header affiche **API connectée** et **Base connectée**.
 - `/admin` → connexion → saisissez un match : la page publique se met à jour toute seule (temps réel Supabase).
 
@@ -128,16 +151,39 @@ vercel --prod
 
 ## Fonctionnement des données
 
-| Situation | Matchs affichés | Historique utilisé |
+| Situation | Matchs affichés | Prédiction |
 |---|---|---|
-| API Melbet OK + Supabase configuré | API Melbet | Supabase (équipes reliées par nom/alias) |
-| API Melbet en panne + Supabase configuré | matchs « À venir » / « En direct » saisis dans `/admin` | Supabase |
-| Supabase non configuré | API Melbet, sinon données de test | simulé (mode démo) |
-| Base vide | « Aucune donnée » | — |
+| API Melbet OK + Supabase configuré | matchs de l'API **+** matchs saisis dans `/admin` (sans doublon) | cotes si disponibles, sinon historique Supabase |
+| API Melbet bloquée + Supabase configuré | matchs « À venir » saisis dans `/admin` | cotes saisies, sinon historique Supabase |
+| Supabase non configuré | API Melbet, sinon données de test | cotes, sinon historique simulé (mode démo) |
+| Base vide et API bloquée | « Aucune donnée » | — |
 
-Dans `/admin` :
+Un match saisi dans `/admin` et aussi renvoyé par l'API n'apparaît qu'une fois : mêmes équipes, alias compris, et moins de 30 min d'écart. Si l'API n'a pas de cotes pour ce match, ce sont les cotes saisies qui sont utilisées. Ces matchs portent la mention « admin » sur leur carte.
 
-- **Saisir un match** : équipes (listes déroulantes), statut, date, score final et score à la mi-temps. Les mêmes règles sont vérifiées dans le formulaire et en SQL (deux équipes distinctes, mi-temps ≤ score final).
-- **Derniers matchs saisis** : bouton *Supprimer* (en deux clics).
-- Après chaque ajout ou suppression, les prédictions des matchs à venir de la base sont recalculées et enregistrées dans `predictions` (l'historique est conservé). Le site public se recalcule via le temps réel Supabase.
-- **Ajouter une équipe** : pour les clubs absents de la liste de départ. Un `logo_url` facultatif remplace l'écusson généré.
+## Panneau d'administration (`/admin`)
+
+### Saisir un match « À venir » (quand l'API Melbet est bloquée)
+
+1. Ouvrez `https://<votre-site>/admin` et connectez-vous avec le compte admin.
+2. Dans **Saisir un match**, choisissez le statut **À venir**.
+3. Renseignez les champs obligatoires (*) : **Domicile**, **Extérieur**, **Date**, **Heure** (heure locale de votre navigateur). Aucun score n'est demandé.
+4. *Optionnel :* renseignez les **cotes 1X2** relevées sur un autre site (ex. `1.85`, `3,60`, `4.10`). Il faut les trois cotes ou aucune, chacune supérieure à 1.
+   - Avec cotes, la prédiction est disponible tout de suite, même pour des équipes sans historique.
+   - Sans cotes, elle se base sur l'historique : il faut au moins 3 matchs terminés par équipe.
+5. L'**aperçu** sous le formulaire montre la prédiction qui sera publiée (vainqueur, confiance, score exact et sa base de calcul).
+6. Cliquez sur **Publier le match à venir**. Le match apparaît aussitôt sur la page publique (temps réel Supabase), et sa prédiction est enregistrée dans `predictions`.
+
+Un match « À venir » ne peut pas être daté de plus de 15 min dans le passé : c'est un garde-fou contre une erreur de date ou d'heure.
+
+### Après le match : saisir le résultat
+
+Dans **Derniers matchs saisis**, cliquez sur **Résultat** sur la ligne du match. Le formulaire passe en mode « Saisir le résultat » avec les équipes et la date pré-remplies. Entrez le score final et le score à la mi-temps, puis **Enregistrer le résultat**. Le même match passe à « Terminé », sans doublon, et alimente l'historique des deux équipes.
+
+### Autres actions
+
+- **Saisir un match terminé** : statut **Terminé**, équipes, date, heure, score final et score à la mi-temps. Les mêmes règles sont vérifiées dans le formulaire et en SQL : deux équipes distinctes, mi-temps ≤ score final.
+- **Supprimer** : sur une ligne de la liste, en deux clics.
+- **Équipes & logos** : choisissez **+ Nouvelle équipe** pour en créer une, ou une équipe existante pour lui associer une URL de logo (`https://…`). Un aperçu de l'écusson s'affiche. Laisser le champ vide retire le logo. Sur le site, l'image remplace l'écusson SVG ; si elle ne charge pas (lien cassé, hôte bloqué), l'écusson SVG reprend sa place.
+- **Recalculer** : relance le calcul des prédictions de tous les matchs à venir de la base.
+
+Après chaque ajout, modification ou suppression, les prédictions des matchs à venir de la base sont recalculées et ajoutées à `predictions`, l'historique est conservé, et le site public se met à jour via le temps réel Supabase.

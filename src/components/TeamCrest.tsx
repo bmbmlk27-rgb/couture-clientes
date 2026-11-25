@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
 import type { Team } from '../lib/types';
 
 /**
@@ -8,6 +9,10 @@ import type { Team } from '../lib/types';
 export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number; side: 'home' | 'away' }) {
   const [c1, c2] = team.colors;
   const id = `crest-${team.short}-${side}`;
+  // URL de logo cassée (404, hôte bloqué…) → retour à l'écusson SVG généré.
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [team.logoUrl]);
+  const showLogo = !!team.logoUrl && !broken;
   return (
     <motion.div
       className="relative"
@@ -20,9 +25,11 @@ export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number
         style={{ background: c1 }}
         aria-hidden
       />
-      {team.logoUrl ? (
+      {showLogo ? (
         <img
-          src={team.logoUrl}
+          src={team.logoUrl!}
+          onError={() => setBroken(true)}
+          referrerPolicy="no-referrer"
           alt={`Logo ${team.name}`}
           width={size}
           height={size}

@@ -1,4 +1,5 @@
 import type { Match, MatchStatus } from './types';
+import { isCompleteOdds, oddsFromGameNode, type Odds } from './odds';
 import { resolveTeam } from '../data/teams';
 
 /** Configuration d'origine de l'API Melbet / Xenvelop. */
@@ -112,21 +113,6 @@ function timestamp(g: Obj): number {
   return Date.now();
 }
 
-function odds(g: Obj): Match['odds'] {
-  const out: NonNullable<Match['odds']> = {};
-  const events = Array.isArray(g.E) ? g.E : Array.isArray(g.events) ? g.events : [];
-  for (const e of events) {
-    if (!isObj(e)) continue;
-    const type = Number(e.T ?? e.type);
-    const c = Number(e.C ?? e.coef ?? e.coefficient);
-    if (!Number.isFinite(c)) continue;
-    if (type === 1) out.home = c;
-    else if (type === 2) out.draw = c;
-    else if (type === 3) out.away = c;
-  }
-  return Object.keys(out).length ? out : undefined;
-}
-
 function status(startsAt: number, g: Obj): MatchStatus {
   if (g.finished === true || g.isFinished === true) return 'finished';
   if (g.live === true || g.isLive === true) return 'live';
@@ -150,7 +136,8 @@ export function extractMatches(data: unknown): Match[] {
     const names = teamNames(node);
     if (names) {
       const startsAt = timestamp(node);
-      const id = String(node.I ?? node.id ?? node.gameId ?? `${names.join('-')}-${startsAt}`);
+      const rawId = node.I ?? node.id ?? node.gameId;
+      const id = String(rawId ?? `${names.join('-')}-${startsAt}`);
       if (!seen.has(id)) {
         seen.add(id);
         found.push({
@@ -160,7 +147,9 @@ export function extractMatches(data: unknown): Match[] {
           away: resolveTeam(names[1]),
           startsAt,
           status: status(startsAt, node),
-          odds: odds(node),
+          odds: oddsFromGameNode(node),
+          // Identifiant Melbet numérique : nécessaire pour /api/melbet-odds (GetGame)
+          apiGameId: /^\d+$/.test(String(rawId ?? '')) ? String(rawId) : undefined,
         });
       }
       return;
@@ -175,4 +164,60 @@ export function extractMatches(data: unknown): Match[] {
   walk(data, '', 0);
   const virtual = found.filter((m) => VIRTUAL_RE.test(m.league));
   return (virtual.length ? virtual : found).sort((a, b) => a.startsAt - b.startsAt);
+}
+
+/* ------------------------------------------------------------------ */
+/* Cotes 1X2 via /api/melbet-odds (GetGame)                            */
+/* ------------------------------------------------------------------ */
+
+export const ODDS_URL: string = import.meta.env.VITE_ODDS_URL ?? '/api/melbet-odds';
+const ODDS_TTL_MS = 60_000;
+const ODDS_TIMEOUT_MS = 5000;
+const ODDS_CONCURRENCY = 4;
+const ODDS_MAX_GAMES = 30;
+
+const oddsCache = new Map<string, { at: number; odds: Odds | null }>();
+
+/** Cotes 1X2 d'un match Melbet, ou null (absentes, erreur, délai dépassé). */
+export async function fetchOdds(gameId: string): Promise<Odds | null> {
+  const cached = oddsCache.get(gameId);
+  if (cached && Date.now() - cached.at < ODDS_TTL_MS) return cached.odds;
+  let odds: Odds | null = null;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ODDS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${ODDS_URL}?gameId=${encodeURIComponent(gameId)}`, { signal: ctrl.signal });
+    if (res.ok) {
+      const body = await res.json();
+      odds = isCompleteOdds(body) ? { home: body.home, draw: body.draw, away: body.away } : null;
+    }
+  } catch {
+    odds = null;
+  } finally {
+    clearTimeout(t);
+  }
+  oddsCache.set(gameId, { at: Date.now(), odds });
+  return odds;
+}
+
+/**
+ * Complète les cotes manquantes des matchs non terminés (4 requêtes en
+ * parallèle, 30 matchs max). Un échec laisse simplement le match sans cotes :
+ * sa prédiction se basera sur l'historique.
+ */
+export async function enrichWithOdds(matches: Match[]): Promise<Match[]> {
+  const todo = matches
+    .filter((m) => m.apiGameId && m.status !== 'finished' && !isCompleteOdds(m.odds))
+    .slice(0, ODDS_MAX_GAMES);
+  const found = new Map<string, Odds>();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < todo.length) {
+      const m = todo[cursor++];
+      const odds = await fetchOdds(m.apiGameId!);
+      if (odds) found.set(m.id, odds);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(ODDS_CONCURRENCY, todo.length) }, worker));
+  return found.size ? matches.map((m) => (found.has(m.id) ? { ...m, odds: found.get(m.id) } : m)) : matches;
 }

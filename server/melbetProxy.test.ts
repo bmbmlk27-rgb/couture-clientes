@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { endpointFrom, handleMelbetRequest, MELBET_ORIGIN } from './melbetProxy';
+import { endpointFrom, handleMelbet, handleMelbetOddsRequest, handleMelbetRequest, MELBET_ORIGIN } from './melbetProxy';
 
 const ok = (body = '{"data":[]}', status = 200) =>
   vi.fn(async () => new Response(body, { status, headers: { 'content-type': 'application/json' } }));
@@ -38,5 +38,42 @@ describe('handleMelbetRequest', () => {
   it('renvoie 502 si Melbet est injoignable', async () => {
     const f = vi.fn(async () => { throw new TypeError('fetch failed'); });
     expect((await handleMelbetRequest(new Request('https://x.app/api/melbet/ChampsBySport'), f)).status).toBe(502);
+  });
+});
+
+describe('route /api/melbet-odds', () => {
+  const getGame = { Value: { I: 555, GE: [
+    { G: 2, E: [[{ T: 7, C: 1.9 }]] },
+    { G: 1, E: [[{ T: 1, C: 1.72 }], [{ T: 2, C: 3.9 }], [{ T: 3, C: 4.6 }]] },
+  ] } };
+
+  it('appelle GetGame avec gameId et les paramètres fixes, renvoie { home, draw, away }', async () => {
+    const f = ok(JSON.stringify(getGame));
+    const res = await handleMelbet(new Request('https://x.app/api/melbet-odds?gameId=555'), f);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ home: 1.72, draw: 3.9, away: 4.6 });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${MELBET_ORIGIN}/GetGame?gameId=555&cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&whence=22`);
+    expect((init.headers as Record<string, string>).appguid).toBe('7c961562a8f43193_2');
+  });
+
+  it('accepte la réécriture Vercel ?route=odds', async () => {
+    const res = await handleMelbet(new Request('https://x.app/api/melbet?route=odds&gameId=555'), ok(JSON.stringify(getGame)));
+    expect(res.status).toBe(200);
+  });
+
+  it('valide gameId (pas d’injection dans l’URL Melbet)', async () => {
+    const f = ok();
+    for (const q of ['', '?gameId=', '?gameId=12&x', '?gameId=1%26gr%3D1', '?gameId=abc']) {
+      const r = await handleMelbetOddsRequest(new Request(`https://x.app/api/melbet-odds${q}`), f);
+      if (q === '?gameId=12&x') { expect(r.status).not.toBe(400); continue; }
+      expect(r.status).toBe(400);
+    }
+  });
+
+  it('404 si le marché 1X2 est absent, 502 si Melbet refuse ou renvoie du non-JSON', async () => {
+    expect((await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=1'), ok('{"Value":{"E":[]}}'))).status).toBe(404);
+    expect((await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=1'), ok('nope', 400))).status).toBe(502);
+    expect((await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=1'), ok('<html>'))).status).toBe(502);
   });
 });

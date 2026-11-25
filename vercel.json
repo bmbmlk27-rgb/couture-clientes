@@ -4,6 +4,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api/melbet-odds", "destination": "/api/melbet?route=odds" },
     { "source": "/api/melbet/:path*", "destination": "/api/melbet?path=:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

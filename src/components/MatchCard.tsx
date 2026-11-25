@@ -1,5 +1,5 @@
 import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from 'framer-motion';
-import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
+import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle, Info, Coins, History, PenLine } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { MatchWithPrediction } from '../lib/types';
 import { TeamCrest } from './TeamCrest';
@@ -30,6 +30,23 @@ function StatusPill({ m }: { m: MatchWithPrediction }) {
     <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-neon/10 px-2.5 py-1 font-mono text-[11px] font-semibold text-neon">
       <Clock className="h-3 w-3" />
       {new Date(m.startsAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+    </span>
+  );
+}
+
+/** Source de la prédiction : cotes 1X2 du marché ou historique des équipes. */
+function BasisBadge({ basis, source, margin }: { basis: 'odds' | 'history'; source: string; margin?: number }) {
+  const odds = basis === 'odds';
+  const Icon = odds ? Coins : History;
+  return (
+    <span
+      title={odds ? `${source} · marge bookmaker retirée : ${margin?.toFixed(1)} %` : `${source} · 10 derniers matchs terminés`}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+        odds ? 'bg-gold/10 text-gold ring-1 ring-gold/25' : 'bg-sky-400/10 text-sky-300 ring-1 ring-sky-400/25'
+      }`}
+    >
+      <Icon className="h-3 w-3" />
+      {odds ? 'Basé sur les cotes' : 'Basé sur l’historique'}
     </span>
   );
 }
@@ -81,6 +98,11 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
             <span className="flex min-w-0 items-center gap-1.5 truncate text-[11px] font-medium uppercase tracking-[.14em] text-slate-400">
               <Trophy className="h-3.5 w-3.5 shrink-0 text-gold" />
               <span className="truncate">{match.league}</span>
+              {match.origin === 'database' && (
+                <span title="Match saisi dans l’administration" className="ml-1 inline-flex shrink-0 items-center gap-0.5 rounded bg-white/5 px-1 py-px normal-case tracking-normal text-slate-300">
+                  <PenLine className="h-2.5 w-2.5" /> admin
+                </span>
+              )}
             </span>
             <StatusPill m={match} />
           </header>
@@ -114,7 +136,7 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
                 <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.2em] text-neon">
                   <Sigma className="h-3.5 w-3.5" /> Prédiction
                 </span>
-                <span className="rounded bg-gold/10 px-1.5 py-0.5 font-mono text-[10px] text-gold">{p.source}</span>
+                <BasisBadge basis={p.basis} source={p.source} margin={p.bookmakerMargin} />
               </div>
 
               <div className="grid grid-cols-2 gap-3">

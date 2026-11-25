@@ -1,36 +1,36 @@
 /// <reference types="vitest" />
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { handleMelbet } from './server/melbetProxy';
 
 /**
- * L'API Melbet/Xenvelop n'envoie pas d'en-têtes CORS et le navigateur interdit
- * de forcer `user-agent`. En dev (et en `vite preview`), on passe donc par un
- * proxy local `/api/melbet` qui injecte les en-têtes côté serveur.
+ * En dev (`npm run dev`) et en `npm run preview`, les routes /api/melbet/* et
+ * /api/melbet-odds sont servies par EXACTEMENT le même code que les fonctions
+ * serverless de production (server/melbetProxy.ts).
  */
-const MELBET_TARGET = 'https://n4vkteatv6x0.com';
-const MELBET_HEADERS: Record<string, string> = {
-  accept: 'application/vnd.xenvelop+json',
-  'x-language': 'fr_FR',
-  'x-bundleid': 'org.melbet.vac',
-  appguid: '7c961562a8f43193_2',
-  'x-fcountry': '96',
-  'user-agent': 'org.melbet.vac-user-agent/melbet-v258.0.5',
-  version: 'melbet-v258.0.5',
-};
-
-const proxy = {
-  '/api/melbet': {
-    target: MELBET_TARGET,
-    changeOrigin: true,
-    secure: true,
-    rewrite: (p: string) => p.replace(/^\/api\/melbet/, '/MainFeedLive/mobile/v3'),
-    headers: MELBET_HEADERS,
-  },
-};
+function melbetRelay(): Plugin {
+  const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    const url = req.url ?? '';
+    if (!/^\/api\/melbet(-odds)?(\/|\?|$)/.test(url)) return next();
+    try {
+      const response = await handleMelbet(new Request(`http://localhost${url}`, { method: req.method }));
+      res.statusCode = response.status;
+      response.headers.forEach((v, k) => res.setHeader(k, v));
+      res.end(Buffer.from(await response.arrayBuffer()));
+    } catch (e) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: String(e) }));
+    }
+  };
+  return {
+    name: 'melbet-relay',
+    configureServer: (server) => { server.middlewares.use(middleware); },
+    configurePreviewServer: (server) => { server.middlewares.use(middleware); },
+  };
+}
 
 export default defineConfig({
-  plugins: [react()],
-  server: { proxy },
-  preview: { proxy },
+  plugins: [react(), melbetRelay()],
   test: { environment: 'node' },
 });

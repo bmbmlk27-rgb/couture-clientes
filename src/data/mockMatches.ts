@@ -1,6 +1,24 @@
 import type { Match } from '../lib/types';
-import { BUNDESLIGA_TEAMS, GERMAN_LEAGUE } from './teams';
+import { BUNDESLIGA_TEAMS, GERMAN_LEAGUE, getSimulatedHistory } from './teams';
 import { hashString, mulberry32 } from '../lib/rng';
+import { calculateDoublePoisson } from '../lib/predictionEngine';
+import type { Odds } from '../lib/odds';
+
+const DEMO_MARGIN = 1.06; // marge bookmaker simulée : 6 %
+
+/**
+ * Cotes de démo cohérentes avec les profils des clubs (probabilités Double
+ * Poisson + marge), légèrement bruitées comme un vrai marché.
+ */
+function demoOdds(home: string, away: string, rnd: () => number): Odds | undefined {
+  const p = calculateDoublePoisson(getSimulatedHistory(home), getSimulatedHistory(away));
+  if (!p) return undefined;
+  const odd = (pct: number) => {
+    const noisy = (pct / 100) * (0.92 + rnd() * 0.16);
+    return Math.max(1.05, Math.round((1 / (noisy * DEMO_MARGIN)) * 100) / 100);
+  };
+  return { home: odd(p.probabilities.home), draw: odd(p.probabilities.draw), away: odd(p.probabilities.away) };
+}
 
 const ROUND_MS = 6 * 60 * 1000; // une journée virtuelle toutes les 6 minutes
 
@@ -26,7 +44,8 @@ export function generateMockMatches(now = Date.now()): Match[] {
     for (let k = 0; k < order.length; k += 2) {
       const home = order[k];
       const away = order[k + 1];
-      const odd = () => Math.round((1.4 + rnd() * 3.2) * 100) / 100;
+      // ~1 match sur 3 sans cotes : sa prédiction se base sur l'historique
+      const withOdds = rnd() > 0.33;
       matches.push({
         id: `mock-${slot}-${k / 2}`,
         league: GERMAN_LEAGUE,
@@ -34,7 +53,8 @@ export function generateMockMatches(now = Date.now()): Match[] {
         away: { name: away.name, short: away.short, colors: away.colors },
         startsAt,
         status: r === 0 ? 'live' : 'upcoming',
-        odds: { home: odd(), draw: Math.round((3 + rnd() * 1.5) * 100) / 100, away: odd() },
+        odds: withOdds ? demoOdds(home.name, away.name, rnd) : undefined,
+        origin: 'demo',
       });
     }
   }

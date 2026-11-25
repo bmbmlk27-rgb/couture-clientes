@@ -1,9 +1,10 @@
 /**
  * Fonction serverless Netlify — relais API Melbet.
- * Servie directement sur /api/melbet/* grâce à `config.path`.
+ * Servie directement sur /api/melbet/* (liste des matchs) et
+ * /api/melbet-odds (cotes 1X2) grâce à `config.path`.
  */
-import { handleMelbetRequest } from '../../server/melbetProxy';
+import { handleMelbet } from '../../server/melbetProxy';
 
-export default (request: Request) => handleMelbetRequest(request);
+export default (request: Request) => handleMelbet(request);
 
-export const config = { path: '/api/melbet/*' };
+export const config = { path: ['/api/melbet/*', '/api/melbet-odds'] };

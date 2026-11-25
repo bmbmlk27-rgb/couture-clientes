@@ -1,6 +1,7 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { requireSupabase, supabase } from './supabase';
-import { calculateDoublePoisson, type TeamHistory } from './predictionEngine';
+import { calculateHybridPrediction, type TeamHistory } from './predictionEngine';
+import { isCompleteOdds, type Odds } from './odds';
 import { AVG_LEAGUE_GOALS } from './config';
 import { resolveTeam, sameTeam } from '../data/teams';
 import type { Match, MatchStatus } from './types';
@@ -25,12 +26,22 @@ export interface DbMatch {
   away_score: number | null;
   home_ht_score: number | null;
   away_ht_score: number | null;
+  /** Cotes 1X2 saisies à la main (toutes les trois ou aucune). */
+  odds_home: number | null;
+  odds_draw: number | null;
+  odds_away: number | null;
 }
 
 export type NewMatch = Omit<DbMatch, 'id'>;
 
 const MATCH_COLUMNS =
-  'id, home_team_id, away_team_id, match_date, status, home_score, away_score, home_ht_score, away_ht_score';
+  'id, home_team_id, away_team_id, match_date, status, home_score, away_score, home_ht_score, away_ht_score, odds_home, odds_draw, odds_away';
+
+/** Cotes d'une ligne `matches` (numeric arrive parfois en chaîne). */
+export function oddsOf(m: Pick<DbMatch, 'odds_home' | 'odds_draw' | 'odds_away'>): Odds | undefined {
+  const o = { home: Number(m.odds_home), draw: Number(m.odds_draw), away: Number(m.odds_away) };
+  return m.odds_home != null && isCompleteOdds(o) ? o : undefined;
+}
 
 /** Convertit une erreur PostgREST en message lisible. */
 function fail(context: string, error: { message: string; code?: string }): never {
@@ -57,6 +68,18 @@ export async function insertTeam(name: string, logoUrl?: string): Promise<DbTeam
     .select('id, name, logo_url')
     .single();
   if (error) fail('Ajout de l’équipe', error);
+  return data;
+}
+
+/** Associe (ou retire, avec null) l'URL du logo d'une équipe existante. */
+export async function updateTeamLogo(id: number, logoUrl: string | null): Promise<DbTeam> {
+  const { data, error } = await requireSupabase()
+    .from('teams')
+    .update({ logo_url: logoUrl?.trim() || null })
+    .eq('id', id)
+    .select('id, name, logo_url')
+    .single();
+  if (error) fail('Mise à jour du logo', error);
   return data;
 }
 
@@ -134,6 +157,8 @@ export async function fetchDbFixtures(teams: DbTeam[]): Promise<Match[]> {
       away: resolveTeam(away.name, { dbId: away.id, logoUrl: away.logo_url }),
       startsAt: Date.parse(m.match_date),
       status: m.status,
+      odds: oddsOf(m),
+      origin: 'database' as const,
     }];
   });
 }
@@ -154,6 +179,13 @@ export async function insertMatch(match: NewMatch): Promise<DbMatch> {
   return data;
 }
 
+/** Met à jour un match (ex. passer un match « À venir » à « Terminé » avec son score). */
+export async function updateMatch(id: number, patch: Partial<NewMatch>): Promise<DbMatch> {
+  const { data, error } = await requireSupabase().from('matches').update(patch).eq('id', id).select(MATCH_COLUMNS).single();
+  if (error) fail('Mise à jour du match', error);
+  return data;
+}
+
 export async function deleteMatch(id: number): Promise<void> {
   const { error } = await requireSupabase().from('matches').delete().eq('id', id);
   if (error) fail('Suppression du match', error);
@@ -165,7 +197,7 @@ export async function deleteMatch(id: number): Promise<void> {
 
 /**
  * Recalcule et enregistre (table `predictions`) la prédiction de chaque match
- * à venir / en cours de la base. Appelé par l'admin après chaque saisie.
+ * à venir / en cours de la base : cotes saisies si présentes, sinon historique. Appelé par l'admin après chaque saisie.
  * Les lignes sont ajoutées (pas écrasées) pour garder l'historique des prédictions.
  */
 export async function recomputeUpcomingPredictions(): Promise<{ computed: number; skipped: number }> {
@@ -181,7 +213,7 @@ export async function recomputeUpcomingPredictions(): Promise<{ computed: number
   let skipped = 0;
   for (const m of (data ?? []) as DbMatch[]) {
     const [hh, ah] = await Promise.all([load(m.home_team_id), load(m.away_team_id)]);
-    const p = calculateDoublePoisson(hh, ah, AVG_LEAGUE_GOALS);
+    const p = calculateHybridPrediction(oddsOf(m), hh, ah, AVG_LEAGUE_GOALS);
     if (!p) { skipped++; continue; }
     rows.push({
       match_id: m.id,
@@ -189,6 +221,7 @@ export async function recomputeUpcomingPredictions(): Promise<{ computed: number
       predicted_score_ft: p.fullTimeScore,
       predicted_score_ht: p.halfTimeScore,
       confidence: p.confidence,
+      basis: p.basis,
     });
   }
   if (rows.length) {

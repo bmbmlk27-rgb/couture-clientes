@@ -52,6 +52,30 @@ create table if not exists public.predictions (
 );
 create index if not exists predictions_match_idx on public.predictions (match_id, created_at desc);
 
+-- ---------- Évolution v2 : cotes 1X2, base des prédictions, logos ------
+-- Ajouts rejouables : si vous aviez déjà exécuté la v1 de ce script,
+-- relancez simplement le fichier complet.
+
+alter table public.matches add column if not exists odds_home numeric(6, 2);
+alter table public.matches add column if not exists odds_draw numeric(6, 2);
+alter table public.matches add column if not exists odds_away numeric(6, 2);
+alter table public.matches drop constraint if exists matches_odds_check;
+-- Les trois cotes ou aucune. (num_nonnulls évite le piège « NULL > 1 = NULL »,
+-- qu'une contrainte CHECK laisserait passer.)
+alter table public.matches add constraint matches_odds_check check (
+  num_nonnulls(odds_home, odds_draw, odds_away) = 0
+  or (num_nonnulls(odds_home, odds_draw, odds_away) = 3
+      and odds_home > 1 and odds_draw > 1 and odds_away > 1)
+);
+
+-- 'odds' = prédiction tirée des cotes 1X2 ; 'history' = Double Poisson sur l'historique
+alter table public.predictions add column if not exists basis text not null default 'history';
+alter table public.predictions drop constraint if exists predictions_basis_check;
+alter table public.predictions add constraint predictions_basis_check check (basis in ('odds', 'history'));
+
+alter table public.teams drop constraint if exists teams_logo_url_check;
+alter table public.teams add constraint teams_logo_url_check check (logo_url is null or logo_url ~* '^https?://');
+
 -- ---------- Administrateurs ------------------------------------------
 -- Seuls les comptes listés ici peuvent écrire. Voir README : après avoir créé
 -- l'utilisateur dans Authentication → Users, exécutez :

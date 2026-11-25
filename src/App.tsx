@@ -53,7 +53,7 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <Background />
       <Header
-        apiConnected={source === 'api'}
+        apiConnected={source === 'api' || source === 'mixed'}
         apiError={apiError}
         dbState={dbState}
         dbError={dbError}
@@ -200,7 +200,7 @@ function SkeletonGrid() {
   );
 }
 
-const SOURCE_LABEL: Record<DataSource, string> = { api: 'API Melbet', database: 'Supabase', fallback: 'Démo' };
+const SOURCE_LABEL: Record<DataSource, string> = { api: 'API Melbet', mixed: 'API + Admin', database: 'Supabase', fallback: 'Démo' };
 
 function StatusBanner({ source, apiError, dbState, dbError }: { source: DataSource; apiError?: string; dbState: DbState; dbError?: string }) {
   let msg: React.ReactNode = null;

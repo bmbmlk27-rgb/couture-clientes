@@ -1,3 +1,4 @@
+import type { PartialOdds } from './odds';
 import type { Prediction, TeamHistory } from './predictionEngine';
 
 export interface Team {
@@ -19,7 +20,12 @@ export interface Match {
   away: Team;
   startsAt: number; // timestamp ms
   status: MatchStatus;
-  odds?: { home?: number; draw?: number; away?: number };
+  /** Cotes 1X2 (API Melbet ou saisie manuelle dans /admin). */
+  odds?: PartialOdds;
+  /** Identifiant numérique Melbet, pour récupérer les cotes via /api/melbet-odds. */
+  apiGameId?: string;
+  /** Origine du match : API Melbet, base Supabase (saisie admin) ou démo. */
+  origin?: 'api' | 'database' | 'demo';
 }
 
 export interface MatchWithPrediction extends Match {
@@ -28,8 +34,8 @@ export interface MatchWithPrediction extends Match {
   awayHistory: TeamHistory;
 }
 
-/** Origine des matchs affichés : API Melbet, base Supabase ou données de démo. */
-export type DataSource = 'api' | 'database' | 'fallback';
+/** Origine des matchs affichés : API Melbet, API + saisies admin, base Supabase seule, ou démo. */
+export type DataSource = 'api' | 'mixed' | 'database' | 'fallback';
 
 /** État de la base : non configurée (mode démo), connectée, ou en erreur. */
 export type DbState = 'disabled' | 'connected' | 'error';

@@ -1,11 +1,16 @@
 /**
  * Relais vers l'API Melbet / Xenvelop, partagé par les fonctions serverless
- * Vercel (`api/melbet.ts`) et Netlify (`netlify/functions/melbet.ts`).
+ * Vercel (`api/melbet.ts`), Netlify (`netlify/functions/melbet.ts`) et le
+ * serveur de développement Vite (`vite.config.ts`).
  *
- * Le navigateur appelle  /api/melbet/ChampsBySport?cfView=3&...
- * et la fonction appelle https://n4vkteatv6x0.com/MainFeedLive/mobile/v3/ChampsBySport?...
- * en ajoutant les en-têtes Melbet (impossibles à envoyer depuis un navigateur).
+ * Deux routes :
+ *   /api/melbet/ChampsBySport?…   → liste des matchs (réponse brute Melbet)
+ *   /api/melbet-odds?gameId=123   → GetGame, réduit aux cotes 1X2 :
+ *                                   { home: number, draw: number, away: number }
+ * Les en-têtes Melbet (impossibles à envoyer depuis un navigateur) sont
+ * ajoutés ici.
  */
+import { extract1X2 } from '../src/lib/odds';
 
 export const MELBET_ORIGIN = 'https://n4vkteatv6x0.com/MainFeedLive/mobile/v3';
 
@@ -68,4 +73,63 @@ export async function handleMelbetRequest(request: Request, fetchImpl: typeof fe
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Route /api/melbet-odds : cotes 1X2 d'un match (GetGame)             */
+/* ------------------------------------------------------------------ */
+
+/** Paramètres fixes de GetGame (seul gameId varie). */
+export const GET_GAME_PARAMS = 'cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&whence=22';
+
+export async function handleMelbetOddsRequest(request: Request, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  if (request.method !== 'GET') return json(405, { error: 'Méthode non autorisée' });
+
+  const gameId = new URL(request.url).searchParams.get('gameId') ?? '';
+  if (!/^\d{1,15}$/.test(gameId)) return json(400, { error: 'Paramètre gameId manquant ou invalide (entier attendu)' });
+
+  const target = `${MELBET_ORIGIN}/GetGame?gameId=${gameId}&${GET_GAME_PARAMS}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const upstream = await fetchImpl(target, { headers: MELBET_HEADERS, signal: ctrl.signal });
+    if (!upstream.ok) {
+      return json(502, { error: `Melbet a répondu HTTP ${upstream.status}`, upstreamStatus: upstream.status });
+    }
+    let data: unknown;
+    try {
+      data = await upstream.json();
+    } catch {
+      return json(502, { error: 'Réponse Melbet illisible (JSON invalide)' });
+    }
+    const odds = extract1X2(data);
+    if (!odds) return json(404, { error: 'Cotes 1X2 indisponibles pour ce match' });
+    return new Response(JSON.stringify({ home: odds.home, draw: odds.draw, away: odds.away }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'public, s-maxage=20, stale-while-revalidate=40',
+      },
+    });
+  } catch (e) {
+    const aborted = e instanceof Error && e.name === 'AbortError';
+    return json(aborted ? 504 : 502, { error: aborted ? 'Délai dépassé côté Melbet' : 'API Melbet injoignable' });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Aiguillage commun                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Route vers les cotes si `?route=odds` (réécriture Vercel) ou chemin `/melbet-odds`. */
+export function isOddsRoute(url: URL): boolean {
+  return url.searchParams.get('route') === 'odds' || /\/melbet-odds\/?$/.test(url.pathname);
+}
+
+export function handleMelbet(request: Request, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  return isOddsRoute(new URL(request.url))
+    ? handleMelbetOddsRequest(request, fetchImpl)
+    : handleMelbetRequest(request, fetchImpl);
 }
