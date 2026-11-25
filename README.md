@@ -10,6 +10,7 @@ src/lib/supabase.ts           client Supabase (lit les variables d'environnement
 src/admin/                    panneau /admin
 server/melbetProxy.ts         relais API Melbet : liste des matchs + cotes 1X2 (partagé Vercel / Netlify / dev)
 src/lib/odds.ts               extraction du marché 1X2, probabilités implicites
+functions/api/…               Cloudflare Pages Functions (déploiement recommandé)
 api/melbet.ts                 fonction serverless Vercel
 netlify/functions/melbet.ts   fonction serverless Netlify
 supabase/schema.sql           tables, sécurité (RLS), équipes de départ
@@ -114,6 +115,44 @@ Le relais Melbet (`server/melbetProxy.ts`) sert deux routes, avec le même code 
 Le relais ajoute les en-têtes Melbet et coupe au bout de 8 s. `gameId` doit être un entier, sinon il répond 400. Il répond 404 si le marché 1X2 (groupe 1, types 1/2/3) est absent, et 502 ou 504 si Melbet refuse ou ne répond pas.
 Le front demande les cotes des matchs à venir qui n'en ont pas, avec 4 requêtes en parallèle, 30 matchs au maximum et un cache de 60 s.
 
+#### Option recommandée — Cloudflare Pages
+
+Le dépôt contient déjà les fonctions Cloudflare : `functions/api/melbet/[[path]].ts` et `functions/api/melbet-odds.ts`. Elles réutilisent le relais commun. `.node-version` fixe Node 22 pour le build. Aucun fichier `_redirects` n'est nécessaire : sans `404.html`, Cloudflare sert `index.html` pour `/admin` et les autres routes (mode application monopage).
+
+1. Tableau de bord Cloudflare → **Workers & Pages → Create → Pages → Connect to Git**, puis choisissez le dépôt `couture-clientes`.
+2. **Production branch** : la branche principale du dépôt (`ccr-7de4b535-lu0o3h`).
+3. **Build settings** :
+   - *Framework preset* : `Vite` (ou `None`)
+   - *Build command* : `npm run build`
+   - *Build output directory* : `dist`
+   - *Root directory* : laisser vide
+4. **Environment variables (advanced)** → ajoutez, pour l'environnement **Production** :
+   - `VITE_SUPABASE_URL` = `https://xxxx.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY` = clé *anon public* ou *publishable*
+
+   Ce sont des variables **de build** : ajoutez-les en type *Text* (pas *Secret*) avant le premier déploiement. Si vous les ajoutez après, relancez le déploiement : *Deployments → ⋯ → Retry deployment*.
+5. **Save and Deploy**. Le site est publié sur `https://<projet>.pages.dev`. Ensuite, *Custom domains* permet d'y associer votre domaine.
+
+Vérifications :
+
+- le log de build contient `[MLK] ✓ Supabase configuré (…)` ;
+- `https://<projet>.pages.dev/api/melbet-odds?gameId=abc` renvoie **400** en JSON ;
+- `https://<projet>.pages.dev/admin` affiche l'écran de connexion.
+
+En ligne de commande, sans Git :
+
+```bash
+npm run build
+```
+
+```bash
+npx wrangler pages deploy dist --project-name mlk-fifa-virtuel
+```
+
+(`wrangler pages deploy` envoie aussi le dossier `functions/`. Les variables Supabase doivent alors être définies dans votre terminal au moment du `npm run build`.)
+
+> Melbet peut bloquer les adresses IP de Cloudflare comme celles de Vercel. Si `/api/melbet/…` renvoie 502 en ligne, le site continue de fonctionner avec les matchs saisis dans `/admin`.
+
 #### Option A — Vercel
 
 1. Poussez le dépôt sur GitHub.
@@ -138,9 +177,9 @@ vercel --prod
 2. **Site configuration → Environment variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`.
 3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` et `/api/melbet-odds` (`config.path`), et les autres routes renvoient `index.html`.
 
-#### Le site sort en « mode démo » sur Vercel
+#### Le site sort en « mode démo » (Cloudflare, Vercel ou Netlify)
 
-Le mode démo signifie que l'URL ou la clé Supabase était **absente au moment du build**. Le bandeau du site indique la variable manquante, et le log de build Vercel (*Deployments → (le déploiement) → Building*) affiche l'une de ces lignes :
+Le mode démo signifie que l'URL ou la clé Supabase était **absente au moment du build**. Le bandeau du site indique la variable manquante, et le log de build (Cloudflare : *Deployments → View details* ; Vercel : *Deployments → (le déploiement) → Building*) affiche l'une de ces lignes :
 
 ```
 [MLK] ⚠ Supabase NON configuré — le site sera en MODE DÉMO. Variables manquantes : …
@@ -149,7 +188,7 @@ Le mode démo signifie que l'URL ou la clé Supabase était **absente au moment 
 
 Causes possibles, par ordre de fréquence :
 
-1. **Variables ajoutées après le déploiement.** Elles ne sont lues qu'au build : *Deployments → ⋯ → Redeploy*, en décochant *Use existing Build Cache*.
+1. **Variables ajoutées après le déploiement.** Elles ne sont lues qu'au build. Relancez un déploiement : Cloudflare *Deployments → ⋯ → Retry deployment* ; Vercel *Deployments → ⋯ → Redeploy*, en décochant *Use existing Build Cache*.
 2. **Mauvais environnement.** La variable doit être cochée pour **Production** (et Preview si besoin), pas seulement Development.
 3. **Nom mal orthographié.** Noms acceptés :
    - URL : `VITE_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL` ou `SUPABASE_URL` ;
