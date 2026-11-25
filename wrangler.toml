@@ -1,5 +1,12 @@
-# Cloudflare Pages — `npm run build` produit `dist`, les fonctions sont dans `functions/`.
-# Sans 404.html à la racine de `dist`, Pages renvoie index.html pour toute route inconnue (/admin compris).
-name = "mlk-fifa-virtuel"
-pages_build_output_dir = "dist"
+# Cloudflare Workers : `npm run build` produit `dist`, puis `npx wrangler deploy`.
+# Le nom doit correspondre au Worker créé dans le tableau de bord Cloudflare.
+name = "mlkfifa"
+main = "worker/index.ts"
 compatibility_date = "2026-11-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# Les appels /api/* passent par le Worker (relais Melbet) avant les fichiers statiques.
+run_worker_first = ["/api/*"]
