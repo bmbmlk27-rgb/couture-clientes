@@ -214,7 +214,7 @@ function StatusBanner({ source, apiError, dbState, dbError }: { source: DataSour
         {supabaseMissingVars && (
           <>
             {' '}Variable(s) absente(s) lors du build : <code className="font-mono">{supabaseMissingVars}</code>.
-            Ajoutez-les dans Vercel (Settings → Environment Variables, environnement « Production ») puis relancez un déploiement.
+            Ajoutez-les dans Cloudflare Pages (Settings → Variables and Secrets, environnement « Production ») puis relancez un déploiement.
           </>
         )}
         {source === 'fallback' && <> API Melbet indisponible ({apiError ?? 'erreur inconnue'}) : matchs de test affichés.</>}

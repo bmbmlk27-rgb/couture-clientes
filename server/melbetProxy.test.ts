@@ -5,7 +5,7 @@ const ok = (body = '{"data":[]}', status = 200) =>
   vi.fn(async () => new Response(body, { status, headers: { 'content-type': 'application/json' } }));
 
 describe('endpointFrom', () => {
-  it('lit ?path= (Vercel) et le chemin (Netlify)', () => {
+  it('lit ?path= et le chemin (Cloudflare Pages)', () => {
     expect(endpointFrom(new URL('https://x.app/api/melbet?path=ChampsBySport&a=1'))).toBe('ChampsBySport');
     expect(endpointFrom(new URL('https://x.app/api/melbet/ChampsBySport?a=1'))).toBe('ChampsBySport');
   });
@@ -57,7 +57,7 @@ describe('route /api/melbet-odds', () => {
     expect((init.headers as Record<string, string>).appguid).toBe('7c961562a8f43193_2');
   });
 
-  it('accepte la réécriture Vercel ?route=odds', async () => {
+  it('accepte aussi ?route=odds', async () => {
     const res = await handleMelbet(new Request('https://x.app/api/melbet?route=odds&gameId=555'), ok(JSON.stringify(getGame)));
     expect(res.status).toBe(200);
   });

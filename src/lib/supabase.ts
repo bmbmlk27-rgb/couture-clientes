@@ -6,7 +6,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  * ============================================================================
  *  NE PAS écrire les clés dans ce fichier. Elles sont lues depuis :
  *   • en local       : le fichier `.env.local` à la racine (copier `.env.example`)
- *   • en production  : les variables d'environnement Vercel / Netlify
+ *   • en production  : les variables d'environnement Cloudflare Pages
  *
  *    VITE_SUPABASE_URL       = https://<votre-projet>.supabase.co
  *    VITE_SUPABASE_ANON_KEY  = clé « anon public » ou « publishable »
@@ -15,7 +15,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  *  Les noms créés par l'intégration Supabase de Vercel (NEXT_PUBLIC_SUPABASE_URL,
  *  SUPABASE_URL, SUPABASE_ANON_KEY…) sont aussi acceptés : voir
  *  server/supabaseEnv.ts, appliqué au build par vite.config.ts.
- *  ⚠ Les variables sont lues AU BUILD : après les avoir ajoutées sur Vercel,
+ *  ⚠ Les variables sont lues AU BUILD : après les avoir ajoutées sur Cloudflare,
  *  relancez un déploiement.
  *
  *  ⚠ N'utilisez JAMAIS la clé `service_role` ici : tout ce qui commence par

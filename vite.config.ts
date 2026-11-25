@@ -32,11 +32,11 @@ function melbetRelay(): Plugin {
 }
 
 export default defineConfig(({ mode, command }) => {
-  // Toutes les variables (fichiers .env + variables Vercel/Netlify), pas seulement VITE_*.
+  // Toutes les variables (fichiers .env + variables Cloudflare Pages), pas seulement VITE_*.
   const supabase = resolveSupabaseEnv({ ...loadEnv(mode, process.cwd(), ''), ...process.env });
 
   if (command === 'build' && mode !== 'test') {
-    // Visible dans les logs de build Vercel / Netlify : diagnostic immédiat du mode démo.
+    // Visible dans les logs de build Cloudflare Pages : diagnostic immédiat du mode démo.
     console.log(
       supabase.missing.length
         ? `\n[MLK] ⚠ Supabase NON configuré — le site sera en MODE DÉMO. Variables manquantes : ${supabase.missing.join(', ')}\n`

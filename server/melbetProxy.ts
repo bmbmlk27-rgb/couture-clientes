@@ -1,6 +1,6 @@
 /**
  * Relais vers l'API Melbet / Xenvelop, partagé par les fonctions serverless
- * Vercel (`api/melbet.ts`), Netlify (`netlify/functions/melbet.ts`) et le
+ * Cloudflare Pages (`functions/api/melbet/[[path]].ts`, `functions/api/melbet-odds.ts`) et le
  * serveur de développement Vite (`vite.config.ts`).
  *
  * Deux routes :
@@ -35,7 +35,7 @@ const json = (status: number, body: unknown) =>
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 
-/** Extrait le nom de l'endpoint : `?path=` (réécriture Vercel) ou `/…/melbet/<endpoint>` (Netlify). */
+/** Extrait le nom de l'endpoint : `?path=` ou chemin `/…/melbet/<endpoint>` (Cloudflare Pages, dev Vite). */
 export function endpointFrom(url: URL): string {
   const fromQuery = url.searchParams.get('path');
   if (fromQuery) return fromQuery.replace(/^\/+|\/+$/g, '');
@@ -52,7 +52,7 @@ export async function handleMelbetRequest(request: Request, fetchImpl: typeof fe
 
   const query = new URLSearchParams(url.searchParams);
   query.delete('path');
-  const target = `${MELBET_ORIGIN}/${endpoint}${query.size ? `?${query}` : ''}`;
+  const target = `${MELBET_ORIGIN}/${endpoint}${query.toString() ? `?${query}` : ''}`;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -123,7 +123,7 @@ export async function handleMelbetOddsRequest(request: Request, fetchImpl: typeo
 /* Aiguillage commun                                                   */
 /* ------------------------------------------------------------------ */
 
-/** Route vers les cotes si `?route=odds` (réécriture Vercel) ou chemin `/melbet-odds`. */
+/** Route vers les cotes si `?route=odds` ou chemin `/melbet-odds`. */
 export function isOddsRoute(url: URL): boolean {
   return url.searchParams.get('route') === 'odds' || /\/melbet-odds\/?$/.test(url.pathname);
 }

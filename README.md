@@ -8,10 +8,9 @@ src/lib/predictionEngine.ts   moteur Double Poisson
 src/lib/db.ts                 requêtes Supabase (historique, matchs, prédictions)
 src/lib/supabase.ts           client Supabase (lit les variables d'environnement)
 src/admin/                    panneau /admin
-server/melbetProxy.ts         relais API Melbet : liste des matchs + cotes 1X2 (partagé Vercel / Netlify / dev)
+server/melbetProxy.ts         relais API Melbet : liste des matchs + cotes 1X2 (partagé Cloudflare / dev)
 src/lib/odds.ts               extraction du marché 1X2, probabilités implicites
-api/melbet.ts                 fonction serverless Vercel
-netlify/functions/melbet.ts   fonction serverless Netlify
+functions/api/               Cloudflare Pages Functions (/api/melbet/*, /api/melbet-odds)
 supabase/schema.sql           tables, sécurité (RLS), équipes de départ
 ```
 
@@ -100,7 +99,7 @@ Le panneau `/admin` utilise ce compte. Il n'y a pas de mot de passe codé en dur
 | `VITE_API_BASE_URL` | URL du relais Melbet (défaut `/api/melbet`) | non |
 
 - **En local** : dans `.env.local` (ignoré par git).
-- **Sur Vercel / Netlify** : dans les réglages du projet (voir ci-dessous). Les variables sont intégrées **au moment du build** : après les avoir modifiées, relancez un déploiement. Les noms de l'intégration Supabase de Vercel (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_ANON_KEY`…) sont aussi acceptés.
+- **Sur Cloudflare Pages** : dans les réglages du projet (voir ci-dessous). Les variables sont intégrées **au moment du build** : après les avoir modifiées, relancez un déploiement. Les noms `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`… sont aussi acceptés.
 
 ### 5. Déployer
 
@@ -114,48 +113,46 @@ Le relais Melbet (`server/melbetProxy.ts`) sert deux routes, avec le même code 
 Le relais ajoute les en-têtes Melbet et coupe au bout de 8 s. `gameId` doit être un entier, sinon il répond 400. Il répond 404 si le marché 1X2 (groupe 1, types 1/2/3) est absent, et 502 ou 504 si Melbet refuse ou ne répond pas.
 Le front demande les cotes des matchs à venir qui n'en ont pas, avec 4 requêtes en parallèle, 30 matchs au maximum et un cache de 60 s.
 
-#### Option A — Vercel
+#### Cloudflare Pages (via GitHub)
 
-1. Poussez le dépôt sur GitHub.
-2. <https://vercel.com/new> → importez le dépôt. Le framework **Vite** est détecté (`vercel.json` fixe `npm run build` et `dist`).
-3. **Settings → Environment Variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` (Production + Preview).
-4. **Deploy**. `vercel.json` route `/api/melbet/*` et `/api/melbet-odds` vers `api/melbet.ts`, et toutes les autres routes (dont `/admin`) vers `index.html`.
+1. <https://dash.cloudflare.com> → **Workers & Pages → Create → Pages → Connect to Git** → choisissez le dépôt.
+2. Réglages de build :
+   - *Framework preset* : **Vite** (ou *None*)
+   - *Build command* : `npm run build`
+   - *Build output directory* : `dist`
+3. **Environment variables** (même écran, ou plus tard *Settings → Variables and Secrets*) : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` pour **Production** (et Preview si besoin). Ajoutez aussi `NODE_VERSION` = `20`.
+4. **Save and Deploy**. Chaque push sur la branche de production redéploie le site.
 
-En ligne de commande :
+Le dossier `functions/` est détecté automatiquement : `functions/api/melbet/[[path]].ts` répond sur `/api/melbet/*` et `functions/api/melbet-odds.ts` sur `/api/melbet-odds`. Les autres routes (dont `/admin`) renvoient `index.html`. Cloudflare Pages fait ce repli SPA tout seul quand il n'y a pas de `404.html`.
+
+#### Cloudflare Pages (en ligne de commande)
 
 ```bash
-npm i -g vercel
+npx wrangler login
 ```
 
 ```bash
-vercel --prod
+npm run cf:deploy
 ```
 
-#### Option B — Netlify
+Cette commande compile le site puis envoie `dist/` et `functions/` au projet `mlk-fifa-virtuel`, qui est créé au premier envoi. Les variables Supabase sont lues **sur votre machine** au moment du build (`.env.local`). Pour tester le site avec le vrai runtime Cloudflare en local : `npm run build && npm run cf:dev` (http://localhost:8788).
 
-1. <https://app.netlify.com> → **Add new site → Import an existing project** → choisissez le dépôt.
-   `netlify.toml` fixe la commande (`npm run build`), le dossier publié (`dist`) et les fonctions (`netlify/functions`).
-2. **Site configuration → Environment variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`.
-3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` et `/api/melbet-odds` (`config.path`), et les autres routes renvoient `index.html`.
+#### Le site sort en « mode démo »
 
-#### Le site sort en « mode démo » sur Vercel
-
-Le mode démo signifie que l'URL ou la clé Supabase était **absente au moment du build**. Le bandeau du site indique la variable manquante, et le log de build Vercel (*Deployments → (le déploiement) → Building*) affiche l'une de ces lignes :
+Le mode démo signifie que l'URL ou la clé Supabase était **absente au moment du build**. Le bandeau du site indique la variable manquante, et le log de build (*Workers & Pages → le projet → Deployments → View details*) affiche l'une de ces lignes :
 
 ```
 [MLK] ⚠ Supabase NON configuré — le site sera en MODE DÉMO. Variables manquantes : …
-[MLK] ✓ Supabase configuré (VITE_SUPABASE_URL → https://xxxx.supabase.co, clé : VITE_SUPABASE_ANON_KEY)
+[MLK] ✓ Supabase configuré (…)
 ```
 
-Causes possibles, par ordre de fréquence :
+Causes possibles :
 
-1. **Variables ajoutées après le déploiement.** Elles ne sont lues qu'au build : *Deployments → ⋯ → Redeploy*, en décochant *Use existing Build Cache*.
-2. **Mauvais environnement.** La variable doit être cochée pour **Production** (et Preview si besoin), pas seulement Development.
+1. **Variables ajoutées après le déploiement.** Elles ne sont lues qu'au build : *Deployments → ⋯ → Retry deployment*.
+2. **Mauvais environnement.** La variable doit être définie pour **Production** (et Preview si besoin).
 3. **Nom mal orthographié.** Noms acceptés :
    - URL : `VITE_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL` ou `SUPABASE_URL` ;
-   - clé : `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_ANON_KEY`, etc.
-
-   Les noms créés par l'intégration Supabase de Vercel conviennent donc aussi.
+   - clé : `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_ANON_KEY` ou `SUPABASE_PUBLISHABLE_KEY`.
 4. **Mauvaise clé.** Utilisez la clé **anon public** (onglet *Legacy API keys*) ou **publishable** (`sb_publishable_…`). Une clé secrète (`service_role` ou `sb_secret_…`) **fait échouer le build** volontairement : elle serait publiée dans le JavaScript du site.
 
 Les espaces, les guillemets, un `/` final ou un `https://` manquant dans l'URL sont corrigés automatiquement.
@@ -167,7 +164,7 @@ Les espaces, les guillemets, un `/` final ou un `https://` manquant dans l'URL s
 - Le header affiche **API connectée** et **Base connectée**.
 - `/admin` → connexion → saisissez un match : la page publique se met à jour toute seule (temps réel Supabase).
 
-> Melbet peut bloquer les adresses IP des datacenters ou certains pays. Si le relais renvoie 403 ou 502 en production alors qu'il fonctionne en local, choisissez une région de fonction proche de la cible (Vercel : *Settings → Functions → Region* ; Netlify : *Functions region*). Les relais Vercel et Netlify ont été testés unitairement, mais pas sur une plateforme réelle.
+> Melbet peut bloquer les adresses IP des datacenters ou certains pays. Les Pages Functions s'exécutent sur le réseau Cloudflare, au plus près du visiteur. Si le relais renvoie 403 ou 502 en production alors qu'il fonctionne en local, c'est probablement Melbet qui refuse les IP Cloudflare. Les fonctions ont été testées en local avec `wrangler pages dev` (routage, 400/404), mais l'appel réel à Melbet n'a pas pu être vérifié depuis l'environnement de développement.
 
 ---
 
