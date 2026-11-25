@@ -9,7 +9,14 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  *   • en production  : les variables d'environnement Vercel / Netlify
  *
  *    VITE_SUPABASE_URL       = https://<votre-projet>.supabase.co
- *    VITE_SUPABASE_ANON_KEY  = clé « anon public » (Dashboard → Project Settings → API)
+ *    VITE_SUPABASE_ANON_KEY  = clé « anon public » ou « publishable »
+ *                              (Dashboard → Project Settings → API Keys)
+ *
+ *  Les noms créés par l'intégration Supabase de Vercel (NEXT_PUBLIC_SUPABASE_URL,
+ *  SUPABASE_URL, SUPABASE_ANON_KEY…) sont aussi acceptés : voir
+ *  server/supabaseEnv.ts, appliqué au build par vite.config.ts.
+ *  ⚠ Les variables sont lues AU BUILD : après les avoir ajoutées sur Vercel,
+ *  relancez un déploiement.
  *
  *  ⚠ N'utilisez JAMAIS la clé `service_role` ici : tout ce qui commence par
  *  VITE_ est intégré au JavaScript envoyé aux visiteurs. La clé anon est
@@ -21,6 +28,9 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+/** Variables absentes au moment du build (affichées dans le bandeau « Mode démo »). */
+export const supabaseMissingVars: string = (import.meta.env.VITE_SUPABASE_MISSING as string | undefined) ?? '';
 
 /** `null` quand les variables ne sont pas définies : l'app passe alors en mode démo. */
 export const supabase: SupabaseClient | null = isSupabaseConfigured
