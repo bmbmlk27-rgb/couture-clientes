@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Les fonctions déclarant `config.path` (/api/melbet/*) passent avant cette règle.
+# Fallback SPA : /admin et toute autre route renvoient index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

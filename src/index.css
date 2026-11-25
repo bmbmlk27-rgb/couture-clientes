@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: dark; }
+  html { -webkit-tap-highlight-color: transparent; }
+  body {
+    @apply min-h-screen bg-abyss font-sans text-slate-200 antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(57, 255, 136, 0.3); }
+}
+
+@layer utilities {
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+}
