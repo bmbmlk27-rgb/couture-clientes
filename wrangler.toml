@@ -1,0 +1,5 @@
+# Cloudflare Pages — `npm run build` produit `dist`, les fonctions sont dans `functions/`.
+# Sans 404.html à la racine de `dist`, Pages renvoie index.html pour toute route inconnue (/admin compris).
+name = "mlk-fifa-virtuel"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-11-01"

@@ -12,6 +12,7 @@ server/melbetProxy.ts         relais API Melbet : liste des matchs + cotes 1X2 (
 src/lib/odds.ts               extraction du marché 1X2, probabilités implicites
 api/melbet.ts                 fonction serverless Vercel
 netlify/functions/melbet.ts   fonction serverless Netlify
+functions/api/                Cloudflare Pages Functions (melbet/[[path]].ts, melbet-odds.ts)
 supabase/schema.sql           tables, sécurité (RLS), équipes de départ
 ```
 
@@ -137,6 +138,28 @@ vercel --prod
    `netlify.toml` fixe la commande (`npm run build`), le dossier publié (`dist`) et les fonctions (`netlify/functions`).
 2. **Site configuration → Environment variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`.
 3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` et `/api/melbet-odds` (`config.path`), et les autres routes renvoient `index.html`.
+
+#### Option C — Cloudflare Pages
+
+1. <https://dash.cloudflare.com> → **Workers & Pages → Create → Pages → Connect to Git** → choisissez le dépôt.
+2. Réglages du build :
+   - *Framework preset* : **Vite** (ou aucun) ;
+   - *Build command* : `npm run build` ;
+   - *Build output directory* : `dist`.
+3. **Environment variables** (avant le premier build) : `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, et `NODE_VERSION` = `20`.
+4. **Save and Deploy**. Les fonctions de `functions/` répondent sur `/api/melbet/*` et `/api/melbet-odds`. Comme `dist` ne contient pas de `404.html`, Pages renvoie `index.html` pour les autres routes (dont `/admin`).
+
+En ligne de commande (`wrangler.toml` fixe le nom du projet et le dossier `dist`) :
+
+```bash
+npm run build
+```
+
+```bash
+npx wrangler pages deploy
+```
+
+Après avoir modifié une variable : *Deployments → ⋯ → Retry deployment* (elles ne sont lues qu'au build).
 
 #### Le site sort en « mode démo » sur Vercel
 
