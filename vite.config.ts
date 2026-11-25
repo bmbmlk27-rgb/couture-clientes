@@ -1,9 +1,8 @@
 /// <reference types="vitest" />
-import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleMelbet } from './server/melbetProxy';
-import { resolveSupabaseEnv } from './server/supabaseEnv';
 
 /**
  * En dev (`npm run dev`) et en `npm run preview`, les routes /api/melbet/* et
@@ -31,26 +30,7 @@ function melbetRelay(): Plugin {
   };
 }
 
-export default defineConfig(({ mode, command }) => {
-  // Toutes les variables (fichiers .env + variables Vercel/Netlify), pas seulement VITE_*.
-  const supabase = resolveSupabaseEnv({ ...loadEnv(mode, process.cwd(), ''), ...process.env });
-
-  if (command === 'build' && mode !== 'test') {
-    // Visible dans les logs de build Vercel / Netlify : diagnostic immédiat du mode démo.
-    console.log(
-      supabase.missing.length
-        ? `\n[MLK] ⚠ Supabase NON configuré — le site sera en MODE DÉMO. Variables manquantes : ${supabase.missing.join(', ')}\n`
-        : `\n[MLK] ✓ Supabase configuré (${supabase.urlFrom} → ${supabase.url}, clé : ${supabase.keyFrom})\n`,
-    );
-  }
-
-  return {
-    plugins: [react(), melbetRelay()],
-    define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabase.url),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabase.key),
-      'import.meta.env.VITE_SUPABASE_MISSING': JSON.stringify(supabase.missing.join(', ')),
-    },
-    test: { environment: 'node' },
-  };
+export default defineConfig({
+  plugins: [react(), melbetRelay()],
+  test: { environment: 'node' },
 });

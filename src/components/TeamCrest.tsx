@@ -1,5 +1,4 @@
 import { motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
 import type { Team } from '../lib/types';
 
 /**
@@ -9,10 +8,6 @@ import type { Team } from '../lib/types';
 export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number; side: 'home' | 'away' }) {
   const [c1, c2] = team.colors;
   const id = `crest-${team.short}-${side}`;
-  // URL de logo cassée (404, hôte bloqué…) → retour à l'écusson SVG généré.
-  const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [team.logoUrl]);
-  const showLogo = !!team.logoUrl && !broken;
   return (
     <motion.div
       className="relative"
@@ -25,18 +20,6 @@ export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number
         style={{ background: c1 }}
         aria-hidden
       />
-      {showLogo ? (
-        <img
-          src={team.logoUrl!}
-          onError={() => setBroken(true)}
-          referrerPolicy="no-referrer"
-          alt={`Logo ${team.name}`}
-          width={size}
-          height={size}
-          loading="lazy"
-          className="relative h-full w-full object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,.6)]"
-        />
-      ) : (
       <svg viewBox="0 0 64 72" width={size} height={size * 1.125} className="relative -mt-[6%]" role="img" aria-label={`Écusson ${team.name}`}>
         <defs>
           <linearGradient id={`${id}-g`} x1="0" y1="0" x2="1" y2="1">
@@ -54,7 +37,6 @@ export function TeamCrest({ team, size = 64, side }: { team: Team; size?: number
           {team.short}
         </text>
       </svg>
-      )}
     </motion.div>
   );
 }

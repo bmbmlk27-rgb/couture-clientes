@@ -5,12 +5,13 @@
  *
  * Deux routes :
  *   /api/melbet/ChampsBySport?…   → liste des matchs (réponse brute Melbet)
- *   /api/melbet-odds?gameId=123   → GetGame, réduit aux cotes 1X2 :
- *                                   { home: number, draw: number, away: number }
+ *   /api/melbet-odds?gameId=123   → GetGame, réduit aux cotes vainqueur :
+ *                                   { home, away, draw? } (draw absent si marché à 2 issues)
+ *   /api/melbet-odds?gameId=123&debug=1 → réponse GetGame brute (diagnostic)
  * Les en-têtes Melbet (impossibles à envoyer depuis un navigateur) sont
  * ajoutés ici.
  */
-import { extract1X2 } from '../src/lib/odds';
+import { extractOdds } from '../src/lib/odds';
 
 export const MELBET_ORIGIN = 'https://n4vkteatv6x0.com/MainFeedLive/mobile/v3';
 
@@ -85,7 +86,9 @@ export const GET_GAME_PARAMS = 'cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&whe
 export async function handleMelbetOddsRequest(request: Request, fetchImpl: typeof fetch = fetch): Promise<Response> {
   if (request.method !== 'GET') return json(405, { error: 'Méthode non autorisée' });
 
-  const gameId = new URL(request.url).searchParams.get('gameId') ?? '';
+  const params = new URL(request.url).searchParams;
+  const gameId = params.get('gameId') ?? '';
+  const debug = params.get('debug') === '1';
   if (!/^\d{1,15}$/.test(gameId)) return json(400, { error: 'Paramètre gameId manquant ou invalide (entier attendu)' });
 
   const target = `${MELBET_ORIGIN}/GetGame?gameId=${gameId}&${GET_GAME_PARAMS}`;
@@ -96,15 +99,21 @@ export async function handleMelbetOddsRequest(request: Request, fetchImpl: typeo
     if (!upstream.ok) {
       return json(502, { error: `Melbet a répondu HTTP ${upstream.status}`, upstreamStatus: upstream.status });
     }
+    if (debug) {
+      return new Response(await upstream.text(), {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
     let data: unknown;
     try {
       data = await upstream.json();
     } catch {
       return json(502, { error: 'Réponse Melbet illisible (JSON invalide)' });
     }
-    const odds = extract1X2(data);
-    if (!odds) return json(404, { error: 'Cotes 1X2 indisponibles pour ce match' });
-    return new Response(JSON.stringify({ home: odds.home, draw: odds.draw, away: odds.away }), {
+    const odds = extractOdds(data);
+    if (!odds) return json(404, { error: 'Cotes vainqueur indisponibles pour ce match' });
+    return new Response(JSON.stringify(odds), {
       status: 200,
       headers: {
         'content-type': 'application/json; charset=utf-8',
