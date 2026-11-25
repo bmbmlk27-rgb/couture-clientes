@@ -12,6 +12,7 @@ server/melbetProxy.ts         relais API Melbet : liste des matchs + cotes 1X2 (
 src/lib/odds.ts               extraction du marché 1X2, probabilités implicites
 api/melbet.ts                 fonction serverless Vercel
 netlify/functions/melbet.ts   fonction serverless Netlify
+worker/index.ts               Worker Cloudflare (relais Melbet + fichiers statiques)
 supabase/schema.sql           tables, sécurité (RLS), équipes de départ
 ```
 
@@ -137,6 +138,26 @@ vercel --prod
    `netlify.toml` fixe la commande (`npm run build`), le dossier publié (`dist`) et les fonctions (`netlify/functions`).
 2. **Site configuration → Environment variables** : ajoutez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`.
 3. **Deploy**. La fonction `melbet` répond sur `/api/melbet/*` et `/api/melbet-odds` (`config.path`), et les autres routes renvoient `index.html`.
+
+#### Option C — Cloudflare Workers
+
+`wrangler.toml` déclare le Worker `mlkfifa` : `worker/index.ts` relaie `/api/melbet/*` et `/api/melbet-odds`, et sert `dist` pour le reste (`/admin` compris, en mode SPA).
+
+1. <https://dash.cloudflare.com> → **Workers & Pages → Create → Import a repository** → choisissez le dépôt.
+2. *Project name* : `mlkfifa` (doit correspondre à `name` dans `wrangler.toml`).
+3. *Build command* : `npm run build` · *Deploy command* : `npx wrangler deploy`.
+4. **Advanced settings → Build variables** : `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` (lues au build, pas à l'exécution).
+5. **Deploy**.
+
+En ligne de commande :
+
+```bash
+npm run build
+```
+
+```bash
+npx wrangler deploy
+```
 
 #### Le site sort en « mode démo » sur Vercel
 
