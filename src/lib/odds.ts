@@ -1,50 +1,52 @@
 /**
- * Cotes 1X2 : type, validation, probabilités implicites et extraction depuis
- * les réponses Melbet / Xenvelop. Module pur, partagé par le front et par
- * les fonctions serverless (server/melbetProxy.ts).
+ * Cotes « vainqueur » d'un match : type, validation, probabilités implicites
+ * et extraction depuis les réponses Melbet / Xenvelop. Module pur, partagé par
+ * le front et par le relais serveur (server/melbetProxy.ts).
+ *
+ * Un match Penalty peut être coté en 1X2 (nul = égalité après les 5 tirs
+ * réglementaires) ou en 2 issues (vainqueur final, mort subite comprise) :
+ * `draw` est donc optionnel.
  */
 
 export interface Odds {
   home: number;
-  draw: number;
   away: number;
+  draw?: number;
 }
 
-/** Cotes partielles telles qu'elles peuvent arriver de l'API ou de la base. */
-export type PartialOdds = Partial<Record<keyof Odds, number | null | undefined>>;
-
 /** Une cote décimale valide est un nombre fini strictement supérieur à 1. */
-const validOdd = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 1;
+export const validOdd = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 1;
 
-export function isCompleteOdds(o: PartialOdds | null | undefined): o is Odds {
-  return !!o && validOdd(o.home) && validOdd(o.draw) && validOdd(o.away);
+export function isValidOdds(o: Partial<Odds> | null | undefined): o is Odds {
+  return !!o && validOdd(o.home) && validOdd(o.away) && (o.draw === undefined || validOdd(o.draw));
 }
 
 /**
  * Probabilités implicites sans la marge du bookmaker :
  * pᵢ = (1 / coteᵢ) / Σ(1 / cote), et marge = Σ(1 / cote) − 1.
+ * `draw` vaut 0 pour un marché à 2 issues.
  */
 export function impliedProbabilities(o: Odds): { home: number; draw: number; away: number; margin: number } {
   const h = 1 / o.home;
-  const d = 1 / o.draw;
+  const d = o.draw ? 1 / o.draw : 0;
   const a = 1 / o.away;
   const sum = h + d + a;
   return { home: h / sum, draw: d / sum, away: a / sum, margin: sum - 1 };
 }
 
 /* ------------------------------------------------------------------ */
-/* Extraction du marché 1X2 dans une réponse Melbet                    */
+/* Extraction dans une réponse Melbet                                  */
 /* ------------------------------------------------------------------ */
 
 /**
  * Conventions de type observées dans le format Xenvelop/1xbet :
- *   groupe (G / groupId / marketId) 1 = marché 1X2
+ *   groupe (G / groupId / marketId) 1 = marché vainqueur (1X2)
  *   type   (T / type / typeId)      1 = victoire domicile, 2 = nul, 3 = victoire extérieur
  *   cote   (C / coef / coefficient / odds)
- * La structure exacte varie selon les versions : on parcourt la réponse et on
- * retient le premier ensemble complet du groupe 1 (ou sans groupe déclaré).
+ * On parcourt la réponse et on retient le premier ensemble du groupe 1
+ * (ou sans groupe déclaré) contenant au moins les cotes domicile et extérieur.
  */
-const MARKET_1X2 = 1;
+const MARKET_WINNER = 1;
 const TYPE_TO_KEY: Record<number, keyof Odds> = { 1: 'home', 2: 'draw', 3: 'away' };
 
 type Obj = Record<string, unknown>;
@@ -62,12 +64,11 @@ const TYPE_KEYS = ['T', 'type', 'typeId', 't'];
 const COEF_KEYS = ['C', 'coef', 'coefficient', 'odds', 'price', 'c'];
 const GROUP_KEYS = ['G', 'group', 'groupId', 'marketId', 'market', 'g'];
 
-export function extract1X2(data: unknown): Odds | null {
-  // Ensembles de cotes collectées par groupe ("?" = groupe non déclaré)
-  const sets = new Map<string, PartialOdds>();
+export function extractOdds(data: unknown): Odds | null {
+  const sets = new Map<string, Partial<Odds>>();
 
   const add = (group: number | undefined, type: number, coef: number) => {
-    if (group !== undefined && group !== MARKET_1X2) return;
+    if (group !== undefined && group !== MARKET_WINNER) return;
     const key = TYPE_TO_KEY[type];
     if (!key || !validOdd(coef)) return;
     const id = group === undefined ? '?' : String(group);
@@ -83,8 +84,7 @@ export function extract1X2(data: unknown): Odds | null {
       return;
     }
     if (!isObj(node)) return;
-    const ownGroup = first(node, GROUP_KEYS);
-    const group = ownGroup ?? inheritedGroup;
+    const group = first(node, GROUP_KEYS) ?? inheritedGroup;
     const type = first(node, TYPE_KEYS);
     const coef = first(node, COEF_KEYS);
     if (type !== undefined && coef !== undefined) add(group, type, coef);
@@ -95,15 +95,17 @@ export function extract1X2(data: unknown): Odds | null {
 
   walk(data, undefined, 0);
   // Priorité au groupe 1 explicitement déclaré, sinon aux cotes sans groupe.
-  for (const id of [String(MARKET_1X2), '?']) {
+  for (const id of [String(MARKET_WINNER), '?']) {
     const s = sets.get(id);
-    if (isCompleteOdds(s)) return { home: s.home, draw: s.draw, away: s.away };
+    if (s && validOdd(s.home) && validOdd(s.away)) {
+      return validOdd(s.draw) ? { home: s.home, draw: s.draw, away: s.away } : { home: s.home, away: s.away };
+    }
   }
   return null;
 }
 
-/** Cotes 1X2 d'un nœud « match » (undefined si absentes ou incomplètes). */
+/** Cotes d'un nœud « match » (undefined si absentes ou incomplètes). */
 export function oddsFromGameNode(game: unknown): Odds | undefined {
   if (!isObj(game)) return undefined;
-  return extract1X2(game) ?? undefined;
+  return extractOdds(game) ?? undefined;
 }

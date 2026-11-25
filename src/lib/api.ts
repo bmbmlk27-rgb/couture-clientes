@@ -1,5 +1,5 @@
 import type { Match, MatchStatus } from './types';
-import { isCompleteOdds, oddsFromGameNode, type Odds } from './odds';
+import { isValidOdds, oddsFromGameNode, type Odds } from './odds';
 import { resolveTeam } from '../data/teams';
 
 /** Configuration d'origine de l'API Melbet / Xenvelop. */
@@ -22,15 +22,8 @@ export const HEADERS: Record<string, string> = {
   version: 'melbet-v258.0.5',
 };
 
-/**
- * L'API renvoie parfois 400 sur les paramètres de ligue/groupe : on essaie
- * des variantes de plus en plus minimales avant de basculer sur le fallback.
- */
-const QUERY_VARIANTS = [
-  'cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22',
-  'cfView=3&fcountry=96&lng=fr_FR&ref=8&sportIds=85&whence=22',
-  'fcountry=96&lng=fr_FR&ref=8&sportIds=85',
-];
+/** Requête FIFA (sportIds=85). Sans `gr=2710`, Melbet répond 400. */
+export const CHAMPS_QUERY = 'cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22';
 
 const TIMEOUT_MS = 8000;
 
@@ -50,32 +43,18 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-/** Récupère les matchs ; renvoie `matches: null` si l'API est indisponible. */
+/** Récupère les matchs Penalty ; `matches: null` si l'API est indisponible. */
 export async function fetchMatches(): Promise<FetchResult> {
   const t0 = performance.now();
-  let lastError = 'Erreur API';
-  for (const qs of QUERY_VARIANTS) {
-    try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/ChampsBySport?${qs}`, { headers: HEADERS });
-      if (response.status === 400) {
-        lastError = 'HTTP 400 (paramètres refusés)';
-        continue; // variante suivante
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      const matches = extractMatches(data);
-      if (matches.length === 0) {
-        lastError = 'Réponse vide';
-        continue;
-      }
-      return { matches, latencyMs: Math.round(performance.now() - t0) };
-    } catch (error) {
-      lastError = error instanceof Error ? (error.name === 'AbortError' ? 'Délai dépassé' : error.message) : String(error);
-      break; // erreur réseau / CORS : inutile d'insister
-    }
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/ChampsBySport?${CHAMPS_QUERY}`, { headers: HEADERS });
+    if (!response.ok) return { matches: null, error: `HTTP ${response.status}` };
+    const matches = extractMatches(await response.json());
+    return { matches, latencyMs: Math.round(performance.now() - t0) };
+  } catch (error) {
+    const msg = error instanceof Error ? (error.name === 'AbortError' ? 'Délai dépassé' : error.message) : String(error);
+    return { matches: null, error: msg };
   }
-  console.warn(`API indisponible (${lastError}), utilisation des données locales.`);
-  return { matches: null, error: lastError };
 }
 
 /* ------------------------------------------------------------------ */
@@ -85,14 +64,17 @@ export async function fetchMatches(): Promise<FetchResult> {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined =>
-  typeof v === 'string' && v.trim() ? v.trim() : isObj(v) ? str(v.name ?? v.title ?? v.N) : undefined;
+  typeof v === 'string' && v.trim() ? v.trim() : isObj(v) ? str(v.fullName ?? v.name ?? v.title ?? v.N) : undefined;
 
-const VIRTUAL_RE = /fifa|fc\s?2\d|virtu|cyber|e-?sport|esoccer/i;
+/** Ligues de séances de tirs au but (« FC25. Penalty », « FIFA23. Penalty », « Penalty »…). */
+export const PENALTY_RE = /penalt/i;
 
 function teamNames(g: Obj): [string, string] | null {
   const pairs: [unknown, unknown][] = [
     [g.O1, g.O2], [g.opp1, g.opp2], [g.team1, g.team2], [g.home, g.away],
     [g.homeTeam, g.awayTeam], [g.O1E, g.O2E],
+    // Format mobile v3 : opponent1: { fullName, opps: [...] }
+    [g.opponent1, g.opponent2],
   ];
   if (Array.isArray(g.teams) && g.teams.length >= 2) pairs.push([g.teams[0], g.teams[1]]);
   if (Array.isArray(g.opponents) && g.opponents.length >= 2) pairs.push([g.opponents[0], g.opponents[1]]);
@@ -105,7 +87,7 @@ function teamNames(g: Obj): [string, string] | null {
 }
 
 function timestamp(g: Obj): number {
-  for (const k of ['S', 'startTime', 'start', 'startDate', 'ts', 'date', 'dateStart']) {
+  for (const k of ['S', 'startTs', 'startTime', 'start', 'startDate', 'ts', 'date', 'dateStart']) {
     const v = g[k];
     const n = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) || Number(v) : NaN;
     if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
@@ -116,9 +98,18 @@ function timestamp(g: Obj): number {
 function status(startsAt: number, g: Obj): MatchStatus {
   if (g.finished === true || g.isFinished === true) return 'finished';
   if (g.live === true || g.isLive === true) return 'live';
+  if (g.nonStarted === true) return 'upcoming';
+  if (g.nonStarted === false) return 'live';
   const now = Date.now();
   if (startsAt > now) return 'upcoming';
   return now - startsAt < 10 * 60 * 1000 ? 'live' : 'finished';
+}
+
+/** Score en cours (« 3-2 ») d'un match commencé. */
+function liveScore(g: Obj): string | undefined {
+  if (g.nonStarted !== false || !isObj(g.scores)) return undefined;
+  const { scoreOpp1, scoreOpp2 } = g.scores;
+  return typeof scoreOpp1 === 'number' && typeof scoreOpp2 === 'number' ? `${scoreOpp1} - ${scoreOpp2}` : undefined;
 }
 
 export function extractMatches(data: unknown): Match[] {
@@ -150,6 +141,7 @@ export function extractMatches(data: unknown): Match[] {
           odds: oddsFromGameNode(node),
           // Identifiant Melbet numérique : nécessaire pour /api/melbet-odds (GetGame)
           apiGameId: /^\d+$/.test(String(rawId ?? '')) ? String(rawId) : undefined,
+          liveScore: liveScore(node),
         });
       }
       return;
@@ -162,8 +154,7 @@ export function extractMatches(data: unknown): Match[] {
   };
 
   walk(data, '', 0);
-  const virtual = found.filter((m) => VIRTUAL_RE.test(m.league));
-  return (virtual.length ? virtual : found).sort((a, b) => a.startsAt - b.startsAt);
+  return found.filter((m) => PENALTY_RE.test(m.league)).sort((a, b) => a.startsAt - b.startsAt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -171,14 +162,14 @@ export function extractMatches(data: unknown): Match[] {
 /* ------------------------------------------------------------------ */
 
 export const ODDS_URL: string = import.meta.env.VITE_ODDS_URL ?? '/api/melbet-odds';
-const ODDS_TTL_MS = 60_000;
+const ODDS_TTL_MS = 20_000;
 const ODDS_TIMEOUT_MS = 5000;
 const ODDS_CONCURRENCY = 4;
 const ODDS_MAX_GAMES = 30;
 
 const oddsCache = new Map<string, { at: number; odds: Odds | null }>();
 
-/** Cotes 1X2 d'un match Melbet, ou null (absentes, erreur, délai dépassé). */
+/** Cotes vainqueur d'un match Melbet, ou null (absentes, erreur, délai dépassé). */
 export async function fetchOdds(gameId: string): Promise<Odds | null> {
   const cached = oddsCache.get(gameId);
   if (cached && Date.now() - cached.at < ODDS_TTL_MS) return cached.odds;
@@ -189,7 +180,7 @@ export async function fetchOdds(gameId: string): Promise<Odds | null> {
     const res = await fetch(`${ODDS_URL}?gameId=${encodeURIComponent(gameId)}`, { signal: ctrl.signal });
     if (res.ok) {
       const body = await res.json();
-      odds = isCompleteOdds(body) ? { home: body.home, draw: body.draw, away: body.away } : null;
+      odds = isValidOdds(body) ? body : null;
     }
   } catch {
     odds = null;
@@ -203,11 +194,11 @@ export async function fetchOdds(gameId: string): Promise<Odds | null> {
 /**
  * Complète les cotes manquantes des matchs non terminés (4 requêtes en
  * parallèle, 30 matchs max). Un échec laisse simplement le match sans cotes :
- * sa prédiction se basera sur l'historique.
+ * la carte indique alors « cotes indisponibles ».
  */
 export async function enrichWithOdds(matches: Match[]): Promise<Match[]> {
   const todo = matches
-    .filter((m) => m.apiGameId && m.status !== 'finished' && !isCompleteOdds(m.odds))
+    .filter((m) => m.apiGameId && m.status !== 'finished' && !isValidOdds(m.odds))
     .slice(0, ODDS_MAX_GAMES);
   const found = new Map<string, Odds>();
   let cursor = 0;

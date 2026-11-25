@@ -1,7 +1,8 @@
 import { motion, useMotionTemplate, useMotionValue, useSpring, useTransform } from 'framer-motion';
-import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle, Info, Coins, History, PenLine } from 'lucide-react';
+import { Clock, Radio, Sigma, Trophy, CheckCircle2, AlertTriangle, Coins, Zap, Info } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { MatchWithPrediction } from '../lib/types';
+import type { PenaltyPrediction } from '../lib/penaltyEngine';
 import { TeamCrest } from './TeamCrest';
 import { ScoreCountUp } from './CountUp';
 import { ConfidenceRing } from './ConfidenceRing';
@@ -10,8 +11,6 @@ export const cardVariants = {
   hidden: { opacity: 0, y: 28, scale: 0.97 },
   show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', stiffness: 120, damping: 18 } },
 };
-
-const avg = (a: number[]) => (a.length ? (a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : '–');
 
 function StatusPill({ m }: { m: MatchWithPrediction }) {
   if (m.status === 'live')
@@ -30,23 +29,6 @@ function StatusPill({ m }: { m: MatchWithPrediction }) {
     <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-neon/10 px-2.5 py-1 font-mono text-[11px] font-semibold text-neon">
       <Clock className="h-3 w-3" />
       {new Date(m.startsAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-    </span>
-  );
-}
-
-/** Source de la prédiction : cotes 1X2 du marché ou historique des équipes. */
-function BasisBadge({ basis, source, margin }: { basis: 'odds' | 'history'; source: string; margin?: number }) {
-  const odds = basis === 'odds';
-  const Icon = odds ? Coins : History;
-  return (
-    <span
-      title={odds ? `${source} · marge bookmaker retirée : ${margin?.toFixed(1)} %` : `${source} · 10 derniers matchs terminés`}
-      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-        odds ? 'bg-gold/10 text-gold ring-1 ring-gold/25' : 'bg-sky-400/10 text-sky-300 ring-1 ring-sky-400/25'
-      }`}
-    >
-      <Icon className="h-3 w-3" />
-      {odds ? 'Basé sur les cotes' : 'Basé sur l’historique'}
     </span>
   );
 }
@@ -71,8 +53,7 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
   };
   const onLeave = () => { mx.set(0.5); my.set(0.5); };
 
-  const winnerName =
-    p?.winner === 'Domicile' ? match.home.name : p?.winner === 'Extérieur' ? match.away.name : 'Match nul';
+  const winnerName = p?.winner === 'home' ? match.home.name : match.away.name;
 
   return (
     <motion.article
@@ -98,11 +79,6 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
             <span className="flex min-w-0 items-center gap-1.5 truncate text-[11px] font-medium uppercase tracking-[.14em] text-slate-400">
               <Trophy className="h-3.5 w-3.5 shrink-0 text-gold" />
               <span className="truncate">{match.league}</span>
-              {match.origin === 'database' && (
-                <span title="Match saisi dans l’administration" className="ml-1 inline-flex shrink-0 items-center gap-0.5 rounded bg-white/5 px-1 py-px normal-case tracking-normal text-slate-300">
-                  <PenLine className="h-2.5 w-2.5" /> admin
-                </span>
-              )}
             </span>
             <StatusPill m={match} />
           </header>
@@ -111,19 +87,23 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
           <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2" style={{ transform: 'translateZ(30px)' }}>
             <TeamBlock m={match} side="home" />
             <div className="relative grid place-items-center">
-              <span className="font-display text-2xl font-bold italic text-transparent [-webkit-text-stroke:1px_rgba(255,255,255,.35)] transition-all duration-500 group-hover:[-webkit-text-stroke:1px_#39ff88] group-hover:drop-shadow-[0_0_10px_rgba(57,255,136,.8)]">
-                VS
-              </span>
+              {match.liveScore ? (
+                <span className="font-display text-2xl font-bold tabular-nums text-danger">{match.liveScore}</span>
+              ) : (
+                <span className="font-display text-2xl font-bold italic text-transparent [-webkit-text-stroke:1px_rgba(255,255,255,.35)] transition-all duration-500 group-hover:[-webkit-text-stroke:1px_#39ff88] group-hover:drop-shadow-[0_0_10px_rgba(57,255,136,.8)]">
+                  VS
+                </span>
+              )}
             </div>
             <TeamBlock m={match} side="away" />
           </div>
 
           {match.odds && (
-            <div className="mt-4 grid grid-cols-3 gap-2 font-mono text-[11px]">
-              {([['1', match.odds.home], ['N', match.odds.draw], ['2', match.odds.away]] as const).map(([k, v]) => (
+            <div className={`mt-4 grid gap-2 font-mono text-[11px] ${match.odds.draw ? 'grid-cols-3' : 'grid-cols-2'}`}>
+              {([['1', match.odds.home], ...(match.odds.draw ? [['N', match.odds.draw]] : []), ['2', match.odds.away]] as [string, number][]).map(([k, v]) => (
                 <div key={k} className="flex justify-between rounded-md bg-white/[.03] px-2 py-1 text-slate-400">
                   <span>{k}</span>
-                  <span className="text-slate-200">{v ? v.toFixed(2) : '—'}</span>
+                  <span className="text-slate-200">{v.toFixed(2)}</span>
                 </div>
               ))}
             </div>
@@ -136,30 +116,44 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
                 <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.2em] text-neon">
                   <Sigma className="h-3.5 w-3.5" /> Prédiction
                 </span>
-                <BasisBadge basis={p.basis} source={p.source} margin={p.bookmakerMargin} />
+                <span
+                  title={`Cotes ${p.market === '1X2' ? '1X2 (N = égalité après 5 tirs)' : 'à 2 issues'} · marge bookmaker retirée : ${p.bookmakerMargin.toFixed(1)} %`}
+                  className="inline-flex items-center gap-1 rounded-md bg-gold/10 px-1.5 py-0.5 text-[10px] font-semibold text-gold ring-1 ring-gold/25"
+                >
+                  <Coins className="h-3 w-3" /> Basé sur les cotes
+                </span>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <ScoreBox label="Mi-temps" score={p.halfTimeScore} delay={delay} />
-                <ScoreBox label="Score exact" score={p.fullTimeScore} delay={delay + 0.15} highlight sub={`${p.fullTimeScoreProbability.toFixed(1)} %`} />
+                <ScoreBox label="Score exact" score={p.topScores[0].score} delay={delay} highlight sub={`${p.topScores[0].probability.toFixed(1)} %`} />
+                <SuddenDeathBox value={p.suddenDeath} />
               </div>
 
-              <OutcomeBar p={p.probabilities} winner={p.winner} delay={delay + 0.1} />
+              <OutcomeBar p={p} delay={delay + 0.1} />
 
-              {!p.scoreMatchesWinner && (
+              {p.topScores[0].winner !== p.winner && (
                 <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-snug text-slate-400">
                   <Info className="mt-px h-3.5 w-3.5 shrink-0 text-gold" />
                   <span>
-                    Le score exact le plus probable ({p.fullTimeScore}) ne désigne pas le vainqueur le plus probable ({p.winner}) :
-                    la tendance 1N2 additionne tous les scores possibles.
+                    Le score le plus probable ({p.topScores[0].score}) fait gagner l’autre équipe : le vainqueur additionne
+                    tous les scores possibles, et l’écart est faible.
                   </span>
                 </p>
               )}
 
+              <div className="mt-3 flex flex-wrap gap-1.5 font-mono text-[10px] text-slate-400">
+                <span className="uppercase tracking-[.14em] text-slate-500">Autres scores</span>
+                {p.topScores.slice(1).map((s) => (
+                  <span key={s.score} className="rounded bg-white/[.04] px-1.5 py-0.5">
+                    <span className="text-slate-200">{s.score}</span> · {s.probability.toFixed(1)} %
+                  </span>
+                ))}
+              </div>
+
               <div className="mt-4 flex items-center justify-between gap-3">
                 <ConfidenceRing value={p.confidence} delay={delay + 0.2} />
                 <div className="min-w-0 text-right">
-                  <div className="text-[10px] uppercase tracking-[.18em] text-slate-400">{p.winner}</div>
+                  <div className="text-[10px] uppercase tracking-[.18em] text-slate-400">Vainqueur</div>
                   <div className="truncate font-display text-base font-bold text-white">{winnerName}</div>
                 </div>
               </div>
@@ -167,11 +161,7 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
           ) : (
             <div className="mt-5 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 p-4 text-sm text-gold">
               <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>
-                Historique insuffisant (3 matchs terminés minimum par équipe) : {match.home.name}{' '}
-                {match.homeHistory.goalsScored.length}, {match.away.name} {match.awayHistory.goalsScored.length}.
-                Ajoutez des résultats dans l’administration.
-              </span>
+              <span>Cotes indisponibles pour ce match : pas de prédiction (nouvelle tentative toutes les 20 s).</span>
             </div>
           )}
         </div>
@@ -182,16 +172,29 @@ export function MatchCard({ match, index }: { match: MatchWithPrediction; index:
 
 function TeamBlock({ m, side }: { m: MatchWithPrediction; side: 'home' | 'away' }) {
   const team = side === 'home' ? m.home : m.away;
-  const h = side === 'home' ? m.homeHistory : m.awayHistory;
+  const conv = m.prediction?.conversion[side];
   return (
     <div className="flex min-w-0 flex-col items-center gap-2 text-center">
       <TeamCrest team={team} side={side} size={60} />
       <div className="w-full min-w-0">
         <div className="truncate font-display text-[15px] font-semibold text-white" title={team.name}>{team.name}</div>
-        <div className="font-mono text-[10px] text-slate-500">
-          {avg(h.goalsScored)} BM · {avg(h.goalsConceded)} BE
+        <div className="font-mono text-[10px] text-slate-500" title="Réussite estimée par tir au but">
+          {conv !== undefined ? `${conv.toFixed(0)} % de réussite` : '—'}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SuddenDeathBox({ value }: { value: number }) {
+  return (
+    <div className="rounded-lg bg-black/25 px-3 py-2.5 text-center">
+      <div className="text-[10px] uppercase tracking-[.16em] text-slate-400">Mort subite</div>
+      <div className="mt-0.5 flex items-center justify-center gap-1 font-display text-[28px] font-bold tabular-nums leading-none text-white">
+        <Zap className="h-5 w-5 text-gold" />
+        {value.toFixed(0)}<span className="text-base text-slate-400">%</span>
+      </div>
+      <div className="mt-1 font-mono text-[10px] text-slate-400">égalité après 5 tirs</div>
     </div>
   );
 }
@@ -210,12 +213,11 @@ function ScoreBox({ label, score, delay, highlight, sub }: { label: string; scor
   );
 }
 
-/** Barre 1 / N / 2 animée : probabilités cumulées de chaque issue. */
-function OutcomeBar({ p, winner, delay }: { p: { home: number; draw: number; away: number }; winner: string; delay: number }) {
+/** Barre domicile / extérieur : probabilité de gagner la séance (mort subite comprise). */
+function OutcomeBar({ p, delay }: { p: PenaltyPrediction; delay: number }) {
   const parts = [
-    { key: '1', v: p.home, on: winner === 'Domicile', color: 'bg-neon' },
-    { key: 'N', v: p.draw, on: winner === 'Match Nul', color: 'bg-slate-400' },
-    { key: '2', v: p.away, on: winner === 'Extérieur', color: 'bg-gold' },
+    { key: '1', v: p.probabilities.home, on: p.winner === 'home', color: 'bg-neon' },
+    { key: '2', v: p.probabilities.away, on: p.winner === 'away', color: 'bg-gold' },
   ];
   return (
     <div className="mt-3">

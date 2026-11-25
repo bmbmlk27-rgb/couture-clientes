@@ -1,20 +1,18 @@
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import { useMemo, useState } from 'react';
-import { Activity, CalendarClock, Flame, LayoutGrid, Filter, Check, DatabaseZap, Target, Home, Gauge, SearchX, Database, Shield } from 'lucide-react';
+import { Activity, CalendarClock, Flame, LayoutGrid, Target, Gauge, Zap, SearchX, WifiOff, Trophy } from 'lucide-react';
 import { Header } from './components/Header';
 import { Tabs, type TabDef } from './components/Tabs';
 import { MatchCard } from './components/MatchCard';
 import { Background } from './components/Background';
 import { CountUp } from './components/CountUp';
-import { useMatches } from './hooks/useMatches';
-import { GERMAN_LEAGUE } from './data/teams';
-import type { DataSource, DbState, MatchWithPrediction } from './lib/types';
-import { AVG_LEAGUE_GOALS } from './lib/config';
-import { supabaseMissingVars } from './lib/supabase';
+import { usePenaltyMatches } from './hooks/usePenaltyMatches';
+import { BASE_CONVERSION } from './lib/penaltyEngine';
+import type { MatchWithPrediction } from './lib/types';
 
 type TabId = 'all' | 'live' | 'upcoming' | 'hot';
-const HIGH_CONFIDENCE = 55;
-const isGerman = (l: string) => /allemagne|germany|bundesliga|deutsch/i.test(l);
+const HIGH_CONFIDENCE = 65;
+const ALL_LEAGUES = 'Toutes';
 
 const gridVariants = {
   hidden: {},
@@ -22,13 +20,14 @@ const gridVariants = {
 };
 
 export default function App() {
-  const { matches, source, apiError, dbState, dbError, latency, loading, updatedAt, reload } = useMatches();
+  const { matches, apiError, latency, loading, updatedAt, reload } = usePenaltyMatches();
   const [tab, setTab] = useState<TabId>('all');
-  const [germanOnly, setGermanOnly] = useState(true);
+  const [league, setLeague] = useState(ALL_LEAGUES);
 
+  const leagues = useMemo(() => [ALL_LEAGUES, ...new Set(matches.map((m) => m.league))], [matches]);
   const scoped = useMemo(
-    () => (germanOnly ? matches.filter((m) => isGerman(m.league)) : matches),
-    [matches, germanOnly],
+    () => (league === ALL_LEAGUES ? matches : matches.filter((m) => m.league === league)),
+    [matches, league],
   );
 
   const byTab: Record<TabId, (m: MatchWithPrediction) => boolean> = {
@@ -47,22 +46,16 @@ export default function App() {
   ];
 
   const predicted = scoped.filter((m) => m.prediction);
-  const avgConf = predicted.length ? predicted.reduce((s, m) => s + m.prediction!.confidence, 0) / predicted.length : 0;
-  const homeShare = predicted.length ? (predicted.filter((m) => m.prediction!.winner === 'Domicile').length / predicted.length) * 100 : 0;
+  const mean = (f: (m: MatchWithPrediction) => number) =>
+    predicted.length ? predicted.reduce((s, m) => s + f(m), 0) / predicted.length : 0;
+  const avgConf = mean((m) => m.prediction!.confidence);
+  const avgSudden = mean((m) => m.prediction!.suddenDeath);
+  const apiDown = !!apiError;
 
   return (
     <MotionConfig reducedMotion="user">
       <Background />
-      <Header
-        apiConnected={source === 'api' || source === 'mixed'}
-        apiError={apiError}
-        dbState={dbState}
-        dbError={dbError}
-        latency={latency}
-        loading={loading}
-        updatedAt={updatedAt}
-        onRefresh={reload}
-      />
+      <Header apiConnected={!apiDown} apiError={apiError} latency={latency} loading={loading} updatedAt={updatedAt} onRefresh={reload} />
 
       <main className="mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6">
         {/* Hero */}
@@ -72,57 +65,60 @@ export default function App() {
           transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
           className="mb-8"
         >
-          <p className="mb-2 font-mono text-xs uppercase tracking-[.3em] text-neon/80">// Football virtuel · FC 26</p>
+          <p className="mb-2 font-mono text-xs uppercase tracking-[.3em] text-neon/80">// Football virtuel · Penalty</p>
           <h2 className="max-w-3xl font-display text-3xl font-bold leading-tight text-white sm:text-4xl">
-            Les pronostics du stade virtuel, <span className="text-gold">calculés</span> — pas devinés.
+            Chaque tir au but, <span className="text-gold">calculé</span> — pas deviné.
           </h2>
         </motion.section>
 
         {/* KPIs */}
-        <motion.section
-          initial="hidden"
-          animate="show"
-          variants={gridVariants}
-          className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4"
-        >
+        <motion.section initial="hidden" animate="show" variants={gridVariants} className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Kpi icon={Target} label="Matchs analysés" value={predicted.length} />
           <Kpi icon={Gauge} label="Confiance moyenne" value={avgConf} decimals={1} suffix="%" />
-          <Kpi icon={Home} label="Victoires domicile prédites" value={homeShare} decimals={0} suffix="%" />
-          <Kpi icon={DatabaseZap} label="Source des matchs" text={SOURCE_LABEL[source]} tone={source === 'fallback' ? 'gold' : 'neon'} />
+          <Kpi icon={Zap} label="Mort subite (moyenne)" value={avgSudden} decimals={0} suffix="%" />
+          <Kpi icon={Trophy} label="Ligues Penalty" value={leagues.length - 1} />
         </motion.section>
 
         {/* Navigation & filtres */}
-        <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="mb-6 flex flex-col gap-3">
           <Tabs tabs={tabs} active={tab} onChange={setTab} />
-          <motion.button
-            whileTap={{ scale: 0.96 }}
-            onClick={() => setGermanOnly((v) => !v)}
-            aria-pressed={germanOnly}
-            className={`flex items-center gap-2 self-start rounded-xl border px-4 py-2.5 text-sm font-semibold backdrop-blur-xl transition ${
-              germanOnly
-                ? 'border-gold/40 bg-gold/10 text-gold shadow-gold'
-                : 'border-white/10 bg-night-800/50 text-slate-400 hover:text-white'
-            }`}
-          >
-            <Filter className="h-4 w-4" />
-            {GERMAN_LEAGUE}
-            <span className={`grid h-4 w-4 place-items-center rounded ${germanOnly ? 'bg-gold text-abyss' : 'border border-white/20'}`}>
-              {germanOnly && <Check className="h-3 w-3" strokeWidth={3} />}
-            </span>
-          </motion.button>
+          {leagues.length > 2 && (
+            <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0">
+              {leagues.map((l) => (
+                <button
+                  key={l}
+                  onClick={() => setLeague(l)}
+                  aria-pressed={league === l}
+                  className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-semibold backdrop-blur-xl transition ${
+                    league === l ? 'border-gold/40 bg-gold/10 text-gold shadow-gold' : 'border-white/10 bg-night-800/50 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {!loading && <StatusBanner source={source} apiError={apiError} dbState={dbState} dbError={dbError} />}
+        {!loading && apiDown && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            className="mb-6 overflow-hidden rounded-xl border border-danger/30 bg-danger/[.07] px-4 py-3 text-sm text-danger"
+          >
+            API Melbet indisponible ({apiError}).{matches.length > 0 && ' Derniers matchs connus affichés.'} Nouvelle tentative toutes les 20 s.
+          </motion.div>
+        )}
 
         {/* Grille */}
         <AnimatePresence mode="wait">
           {loading && matches.length === 0 ? (
             <SkeletonGrid key="skeleton" />
           ) : matches.length === 0 ? (
-            <EmptyState key="no-data" dbState={dbState} />
+            <EmptyState key="no-data" apiDown={apiDown} />
           ) : visible.length === 0 ? (
             <motion.div
-              key={`empty-${tab}-${germanOnly}`}
+              key={`empty-${tab}-${league}`}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -130,15 +126,10 @@ export default function App() {
             >
               <SearchX className="h-8 w-8" />
               <p>Aucun match pour ce filtre.</p>
-              {germanOnly && (
-                <button onClick={() => setGermanOnly(false)} className="text-sm font-semibold text-neon hover:underline">
-                  Afficher toutes les ligues
-                </button>
-              )}
             </motion.div>
           ) : (
             <motion.div
-              key={`${tab}-${germanOnly}-${updatedAt}`}
+              key={`${tab}-${league}`}
               variants={gridVariants}
               initial="hidden"
               animate="show"
@@ -154,15 +145,14 @@ export default function App() {
 
         <footer className="mt-14 border-t border-white/5 pt-6 text-xs leading-relaxed text-slate-500">
           <p>
-            Modèle : Double Poisson normalisé (λ dom = BM<sub>dom</sub>/M × BE<sub>ext</sub>/M × M × 1,1 · λ ext = BM<sub>ext</sub>/M × BE<sub>dom</sub>/M × M × 0,9,
-            M = {AVG_LEAGUE_GOALS}), sur les 10 derniers matchs terminés. Le score exact affiché est la case la plus probable de la matrice ;
-            la tendance 1N2 est la somme des probabilités.
+            Modèle : séance de tirs au but exacte (5 tirs chacun en alternance, arrêt dès qu’une équipe ne peut plus être rattrapée,
+            puis mort subite). La réussite par tir de chaque équipe est calée sur les cotes Melbet, marge du bookmaker retirée :
+            en 1X2, « N » est l’égalité après 5 tirs ; en 2 issues, réussite moyenne fixée à {Math.round(BASE_CONVERSION * 100)} %.
+            Le score exact affiché est le score final le plus probable.
           </p>
           <p className="mt-1">
-            {dbState === 'disabled'
-              ? 'Mode démo : Supabase non configuré, historiques des équipes simulés. '
-              : 'Historiques issus de la base Supabase. '}
-            Outil statistique : aucune garantie de résultat — pariez de façon responsable.
+            Les matchs virtuels sont tirés au sort par un générateur : ce modèle traduit les cotes en probabilités lisibles, il ne bat pas
+            le bookmaker. Outil statistique, aucune garantie de résultat — pariez de façon responsable.
           </p>
         </footer>
       </main>
@@ -201,43 +191,7 @@ function SkeletonGrid() {
   );
 }
 
-const SOURCE_LABEL: Record<DataSource, string> = { api: 'API Melbet', mixed: 'API + Admin', database: 'Supabase', fallback: 'Démo' };
-
-function StatusBanner({ source, apiError, dbState, dbError }: { source: DataSource; apiError?: string; dbState: DbState; dbError?: string }) {
-  let msg: React.ReactNode = null;
-  if (dbState === 'error') {
-    msg = <>Base Supabase injoignable ({dbError}). Les prédictions sont suspendues ; nouvelle tentative toutes les 60 s.</>;
-  } else if (dbState === 'disabled') {
-    msg = (
-      <>
-        <strong>Mode démo</strong> : Supabase n’est pas configuré, les historiques sont simulés.
-        {supabaseMissingVars && (
-          <>
-            {' '}Variable(s) absente(s) lors du build : <code className="font-mono">{supabaseMissingVars}</code>.
-            Ajoutez-les dans Vercel (Settings → Environment Variables, environnement « Production ») puis relancez un déploiement.
-          </>
-        )}
-        {source === 'fallback' && <> API Melbet indisponible ({apiError ?? 'erreur inconnue'}) : matchs de test affichés.</>}
-      </>
-    );
-  } else if (source === 'database') {
-    msg = <>API Melbet indisponible ({apiError ?? 'erreur inconnue'}) : affichage des matchs à venir saisis dans la base.</>;
-  }
-  if (!msg) return null;
-  return (
-    <motion.div
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: 'auto' }}
-      className={`mb-6 overflow-hidden rounded-xl border px-4 py-3 text-sm ${
-        dbState === 'error' ? 'border-danger/30 bg-danger/[.07] text-danger' : 'border-gold/20 bg-gold/[.06] text-gold/90'
-      }`}
-    >
-      {msg}
-    </motion.div>
-  );
-}
-
-function EmptyState({ dbState }: { dbState: DbState }) {
+function EmptyState({ apiDown }: { apiDown: boolean }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -245,20 +199,14 @@ function EmptyState({ dbState }: { dbState: DbState }) {
       exit={{ opacity: 0 }}
       className="grid place-items-center gap-3 rounded-2xl border border-dashed border-white/10 bg-night-800/30 px-6 py-20 text-center backdrop-blur-xl"
     >
-      <Database className="h-9 w-9 text-slate-500" />
-      <p className="font-display text-xl font-semibold text-white">Aucune donnée</p>
+      <WifiOff className="h-9 w-9 text-slate-500" />
+      <p className="font-display text-xl font-semibold text-white">Aucun match Penalty</p>
       <p className="max-w-md text-sm text-slate-400">
-        Aucun match à venir n’a été trouvé (API Melbet indisponible et aucun match « à venir » dans la base).
-        {dbState === 'connected' && ' Saisissez des résultats et les prochains matchs dans l’administration.'}
+        {apiDown
+          ? 'L’API Melbet ne répond pas pour le moment.'
+          : 'Melbet n’a aucun match Penalty programmé en ce moment.'}{' '}
+        La liste se met à jour toute seule toutes les 20 s.
       </p>
-      {dbState === 'connected' && (
-        <a
-          href="/admin"
-          className="mt-2 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-neon to-neon-soft px-4 py-2 text-sm font-semibold text-abyss shadow-neon"
-        >
-          <Shield className="h-4 w-4" /> Ouvrir l’administration
-        </a>
-      )}
     </motion.div>
   );
 }

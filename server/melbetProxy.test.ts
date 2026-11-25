@@ -71,6 +71,18 @@ describe('route /api/melbet-odds', () => {
     }
   });
 
+  it('marché à 2 issues (sans nul) : renvoie { home, away }', async () => {
+    const twoWay = { Value: { GE: [{ G: 1, E: [[{ T: 1, C: 1.55 }], [{ T: 3, C: 2.4 }]] }] } };
+    const res = await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=9'), ok(JSON.stringify(twoWay)));
+    expect(await res.json()).toEqual({ home: 1.55, away: 2.4 });
+  });
+
+  it('debug=1 renvoie la réponse GetGame brute', async () => {
+    const res = await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=9&debug=1'), ok('{"raw":true}'));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('{"raw":true}');
+  });
+
   it('404 si le marché 1X2 est absent, 502 si Melbet refuse ou renvoie du non-JSON', async () => {
     expect((await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=1'), ok('{"Value":{"E":[]}}'))).status).toBe(404);
     expect((await handleMelbetOddsRequest(new Request('https://x.app/api/melbet-odds?gameId=1'), ok('nope', 400))).status).toBe(502);
