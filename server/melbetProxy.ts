@@ -133,7 +133,7 @@ export async function handleMelbetOddsRequest(request: Request, fetchImpl: typeo
 /* ------------------------------------------------------------------ */
 
 /**
- * Prend le prochain match Penalty de ChampsBySport et essaie plusieurs
+ * Prend le prochain match détaillé de ChampsBySport (tout championnat) et essaie plusieurs
  * variantes d'appel des cotes, en renvoyant statut et début de réponse de
  * chacune. Les identifiants viennent de Melbet lui-même (aucune entrée
  * utilisateur dans les URL appelées).
@@ -145,17 +145,17 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Matchs des ligues Penalty : [{ id, league, label, nonStarted }]. */
-export function penaltyGames(data: unknown): { id: number; league: string; label: string; nonStarted: unknown }[] {
-  const out: { id: number; league: string; label: string; nonStarted: unknown }[] = [];
+export function detailedGames(data: unknown): { id: number; league: string; leagueId?: number; label: string; nonStarted: unknown }[] {
+  const out: { id: number; league: string; leagueId?: number; label: string; nonStarted: unknown }[] = [];
   const walk = (node: unknown, depth: number) => {
     if (depth > 8) return;
     if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
     if (!isObj(node)) return;
-    if (Array.isArray(node.games) && typeof node.name === 'string' && /penalt/i.test(node.name)) {
+    if (Array.isArray(node.games) && typeof node.name === 'string') {
       for (const g of node.games) {
         if (!isObj(g) || typeof g.id !== 'number') continue;
         const name = (o: unknown) => (isObj(o) && typeof o.fullName === 'string' ? o.fullName : '?');
-        out.push({ id: g.id, league: node.name, label: `${name(g.opponent1)} - ${name(g.opponent2)}`, nonStarted: g.nonStarted });
+        out.push({ id: g.id, league: node.name, leagueId: typeof node.id === 'number' ? node.id : undefined, label: `${name(g.opponent1)} - ${name(g.opponent2)}`, nonStarted: g.nonStarted });
       }
     }
     for (const v of Object.values(node)) if (typeof v === 'object') walk(v, depth + 1);
@@ -180,15 +180,15 @@ export async function handleMelbetProbe(fetchImpl: typeof fetch = fetch): Promis
   };
 
   const list = await call(`${MELBET_ORIGIN}/ChampsBySport?${CHAMPS_QUERY}`);
-  let games: ReturnType<typeof penaltyGames> = [];
+  let games: ReturnType<typeof detailedGames> = [];
   try {
-    games = penaltyGames(JSON.parse(list.body ?? ''));
+    games = detailedGames(JSON.parse(list.body ?? ''));
   } catch {
     /* réponse illisible : signalée ci-dessous */
   }
   const game = games.find((g) => g.nonStarted === true) ?? games[0];
   if (!game) {
-    return json(200, { error: 'Aucun match Penalty dans ChampsBySport', champsBySport: { status: list.status, body: list.body?.slice(0, 500) } });
+    return json(200, { error: 'Aucun match détaillé dans ChampsBySport', champsBySport: { status: list.status, body: list.body?.slice(0, 500) } });
   }
 
   const id = game.id;
@@ -201,7 +201,29 @@ export async function handleMelbetProbe(fetchImpl: typeof fetch = fetch): Promis
     `${root.replace('/mobile/v3', '')}/LiveFeed/mobile/v3/GetGame?gameId=${id}&${GET_GAME_PARAMS}`,
   ];
   const attempts = await Promise.all(variants.map(call));
-  return json(200, { game, otherPenaltyGames: games.length - 1, attempts });
+
+  // Recherche des noms d'adresses qui existent : 404 vide = n'existe pas,
+  // autre statut (400 JSON compris) = existe. Tous reçoivent les mêmes paramètres.
+  const champ = String(game.leagueId ?? '');
+  const names = [
+    'GamesByChamp', 'GameById', 'GetGameById', 'Game', 'Games', 'GamesByIds', 'GetGameZip', 'GameZip', 'GetGames',
+    'Event', 'Events', 'EventsByChamp', 'ChampGames', 'Champ', 'Champs', 'ChampsByIds', 'Liga', 'Ligas', 'GamesBySport',
+    'Markets', 'GameMarkets', 'GetMarkets', 'Coefs', 'GamesByChamps', 'TopGames', 'TopChamps', 'Line', 'Live',
+    'GameEvents', 'GetGameEvents', 'GameDetails', 'GetGameDetails', 'MainGame', 'GameFull',
+  ];
+  const endpoints = await Promise.all(
+    names.map(async (n) => {
+      const r = await call(`${MELBET_ORIGIN}/${n}?${CHAMPS_QUERY}&gameId=${id}&champId=${champ}`);
+      return { name: n, status: r.status, exists: !(r.status === 404 && !r.body), body: r.body?.slice(0, 300) };
+    }),
+  );
+  return json(200, {
+    game,
+    otherDetailedGames: games.length - 1,
+    attempts,
+    existingEndpoints: endpoints.filter((e) => e.exists),
+    missingEndpoints: endpoints.filter((e) => !e.exists).map((e) => e.name),
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -224,6 +246,15 @@ export const LEAGUE_VARIANTS: ((id: string) => string)[] = [
   (id) => `${MELBET_ORIGIN}/Games?champIds=${id}&${CHAMPS_QUERY}`,
   (id) => `${MELBET_ORIGIN}/GetChamp?champId=${id}&${GET_GAME_PARAMS}`,
   (id) => `${MELBET_HOST}/LineFeed/mobile/v3/ChampsBySport?${CHAMPS_QUERY}&champIds=${id}`,
+  // GamesByChamp existe (400 JSON, pas 404) : on cherche le bon jeu de paramètres.
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champId=${id}&${CHAMPS_QUERY}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champIds=${id}&${CHAMPS_QUERY}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champIds=${id}&${GET_GAME_PARAMS}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?ligaId=${id}&${CHAMPS_QUERY}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?id=${id}&${CHAMPS_QUERY}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champId=${id}&sportId=85&${GET_GAME_PARAMS}`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champId=${id}&sportIds=85&cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8`,
+  (id) => `${MELBET_ORIGIN}/GamesByChamp?champId=${id}&gr=2710&lng=fr_FR&ref=8`,
 ];
 
 /** La réponse contient-elle des matchs du championnat `id` ? */
