@@ -4,6 +4,7 @@ import { predictPenalty, type PenaltyPrediction } from '../lib/penaltyEngine';
 import { predictMatch, type MatchPrediction } from '../lib/matchEngine';
 import type { Odds } from '../lib/odds';
 import type { League, LeagueWithMatches, Match, MatchWithPrediction } from '../lib/types';
+import { rememberMatches, type MatchMemory } from '../lib/matchMemory';
 
 /** Les matchs virtuels durent quelques minutes : rafraîchissement fréquent. */
 const REFRESH_MS = 30_000;
@@ -42,6 +43,8 @@ export function useChampionships() {
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<number>(Date.now());
   const busy = useRef(false);
+  /** Matchs vus lors des appels précédents (Melbet n'en détaille qu'un championnat par appel). */
+  const memory = useRef<MatchMemory>(new Map());
 
   const load = useCallback(async (): Promise<void> => {
     if (busy.current) return;
@@ -53,21 +56,27 @@ export function useChampionships() {
       setLatency(api.latencyMs);
       if (!api.leagues) return; // on garde le dernier affichage
 
-      // 1. Matchs déjà détaillés dans ChampsBySport, puis ceux des autres championnats.
-      const byLeague = new Map<number, Match[]>();
-      for (const m of api.matches) {
-        if (m.leagueId !== undefined) byLeague.set(m.leagueId, [...(byLeague.get(m.leagueId) ?? []), m]);
-      }
-      const missing = api.leagues.filter((l) => l.gamesCount > 0 && !byLeague.has(l.id));
-      const unavailable = new Set<number>();
+      // 1. Matchs détaillés dans ChampsBySport, puis tentative pour les autres championnats.
+      const fresh: Match[] = [...api.matches];
+      const detailed = new Set(fresh.map((m) => m.leagueId));
+      const missing = api.leagues.filter((l) => l.gamesCount > 0 && !detailed.has(l.id));
+      const failed = new Set<number>();
       await pool(missing, LEAGUE_CONCURRENCY, async (l: League) => {
         const ms = await fetchLeagueMatches(l.id);
-        if (ms && ms.length) byLeague.set(l.id, ms.map((m) => ({ ...m, league: l.name, kind: l.kind })));
-        else unavailable.add(l.id);
+        if (ms && ms.length) fresh.push(...ms.map((m) => ({ ...m, league: l.name, kind: l.kind })));
+        else failed.add(l.id);
       });
 
-      // 2. Cotes (GetGame) des matchs non terminés, puis prédictions.
+      // 2. Fusion avec les matchs mémorisés des appels précédents.
+      const byLeague = rememberMatches(memory.current, fresh, Date.now());
+      const unavailable = new Set([...failed].filter((id) => !byLeague.has(id)));
+
+      // 3. Cotes (GetGame) des matchs non terminés, gardées en mémoire, puis prédictions.
       const all = await enrichWithOdds([...byLeague.values()].flat());
+      for (const m of all) {
+        const kept = m.odds && m.leagueId !== undefined ? memory.current.get(m.leagueId)?.get(m.id) : undefined;
+        if (kept && !kept.odds) kept.odds = m.odds;
+      }
       const predicted = new Map<number, MatchWithPrediction[]>();
       for (const m of all) {
         if (m.leagueId === undefined) continue;

@@ -17,13 +17,13 @@ function StatusPill({ m }: { m: MatchWithPrediction }) {
   if (m.status === 'live')
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-danger/15 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-danger">
-        <Radio className="h-3 w-3 animate-pulse" /> En direct
+        <Radio className={`h-3 w-3 ${m.remembered ? '' : 'animate-pulse'}`} /> {m.remembered ? 'En cours · estimé' : 'En direct'}
       </span>
     );
   if (m.status === 'finished')
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/5 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-        <CheckCircle2 className="h-3 w-3" /> Terminé
+        <CheckCircle2 className="h-3 w-3" /> {m.remembered ? 'Terminé · estimé' : 'Terminé'}
       </span>
     );
   return (
