@@ -10,6 +10,7 @@ src/lib/matchEngine.ts        moteur de match classique (Poisson calé sur les c
 src/lib/odds.ts               cotes vainqueur (1X2 ou 2 issues), probabilités implicites
 src/lib/api.ts                championnats et matchs (ChampsBySport, /api/melbet-league), cotes (GetGame)
 src/hooks/useChampionships.ts  chargement, cotes et prédictions, rafraîchi toutes les 30 s
+src/lib/matchMemory.ts        mémoire des matchs vus d'un appel à l'autre
 server/melbetProxy.ts         relais API Melbet (partagé Cloudflare / Vercel / Netlify / dev)
 worker/index.ts               Worker Cloudflare : relais Melbet + fichiers statiques
 ```
@@ -72,7 +73,9 @@ Les matchs virtuels sont tirés au sort par un générateur : le modèle traduit
 | `/api/melbet-league?champId=123` | variantes testées jusqu'à trouver les matchs de ce championnat | JSON Melbet brut, en-tête `x-melbet-variant` |
 | `/api/melbet-league?champId=123&debug=1` | toutes les variantes | statut et début de chaque réponse (diagnostic) |
 
-Le site appelle `ChampsBySport?cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22` (sans `gr=2710`, Melbet répond 400) et lit la liste `mainLigas` (id, nom, pays, nombre de matchs). Cette réponse ne détaille les matchs que d'un championnat : pour les autres, le site appelle `/api/melbet-league`. Le relais y essaie plusieurs requêtes plausibles (`champIds=`, `champId=`, `GetChampGames`…) et garde la première qui renvoie bien des matchs de ce championnat ; si aucune ne marche, le championnat est affiché « détails indisponibles » (nouvel essai après 5 min). Il lit les matchs au format mobile v3 (`opponent1.fullName`, `opponent2.fullName`, `startTs`, `nonStarted`, `scores`).
+Le site appelle `ChampsBySport?cfView=3&fcountry=96&gr=2710&lng=fr_FR&ref=8&sportIds=85&whence=22` (sans `gr=2710`, Melbet répond 400) et lit la liste `mainLigas` (id, nom, pays, nombre de matchs). Cette réponse ne détaille les matchs que d'un championnat : pour les autres, le site appelle `/api/melbet-league`. Le relais y essaie plusieurs requêtes plausibles (`champIds=`, `champId=`, `GetChampGames`…) et garde la première qui renvoie bien des matchs de ce championnat ; si aucune ne marche, le championnat est affiché « détails indisponibles » (nouvel essai après 5 min).
+
+**Mémoire des matchs (contournement).** Aucune requête testée ne renvoie aujourd'hui les matchs d'un championnat précis (`GamesByChamp` existe mais répond toujours 400). Comme `ChampsBySport` détaille un championnat différent d'un appel à l'autre, le site garde les matchs vus à chaque rafraîchissement (`src/lib/matchMemory.ts`) : jusqu'à 15 min après leur début, 30 par championnat. Leur statut est alors estimé d'après l'heure (« En cours · estimé », « Terminé · estimé ») et leur score n'est plus affiché. La mémoire vit dans l'onglet ouvert : elle se remplit au fil des minutes et repart de zéro au rechargement. Il lit les matchs au format mobile v3 (`opponent1.fullName`, `opponent2.fullName`, `startTs`, `nonStarted`, `scores`).
 
 Le relais ajoute les en-têtes Melbet et coupe au bout de 8 s. `gameId` doit être un entier (sinon 400). Il répond 404 si le marché vainqueur est absent, 502/504 si Melbet refuse ou ne répond pas.
 

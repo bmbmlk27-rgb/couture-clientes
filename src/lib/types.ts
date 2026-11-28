@@ -38,6 +38,8 @@ export interface Match {
   apiGameId?: string;
   /** Score en cours (« 3 - 2 ») d'un match commencé. */
   liveScore?: string;
+  /** Match vu lors d'un appel précédent, absent de la dernière réponse Melbet (statut estimé). */
+  remembered?: boolean;
 }
 
 export interface MatchWithPrediction extends Match {
